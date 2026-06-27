@@ -123,19 +123,18 @@ impl AppState {
     pub async fn refresh(&self) {
         let _guard = self.inner.refresh_lock.lock().await;
 
-        let entries = serde_json::from_slice::<Vec<SyntaxEntry>>(Self::EMBEDDED_CACHE)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "embedded cache malformed; using built-in fallback syntax");
-                skript_core::default_syntax::entries()
-            });
+        let entries = match serde_json::from_slice::<Vec<SyntaxEntry>>(Self::EMBEDDED_CACHE) {
+            Ok(entries) => {
+                tracing::info!(count = entries.len(), "loaded embedded SkriptHub cache");
+                entries
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "embedded cache malformed — server will be empty");
+                Vec::new()
+            }
+        };
 
-        if entries.is_empty() {
-            tracing::warn!("embedded cache empty; using built-in fallback syntax");
-            self.install(skript_core::default_syntax::entries());
-        } else {
-            tracing::info!(count = entries.len(), "loaded embedded SkriptHub cache");
-            self.install(entries);
-        }
+        self.install(entries);
     }
 
     /// Compile entries into the index/table and mark the server ready.
