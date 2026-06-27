@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Skript Studio",
+  "version": "0.1.0",
+  "identifier": "com.skriptstudio.app",
+  "build": {
+    "beforeDevCommand": "powershell -ExecutionPolicy Bypass -File scripts\\build-sidecar.ps1 && bun run dev",
+    "beforeBuildCommand": "powershell -ExecutionPolicy Bypass -File scripts\\build-sidecar.ps1 && bun run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Skript Studio",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; connect-src 'self' https://skripthub.net http://127.0.0.1:* ws://127.0.0.1:* https://cdn.jsdelivr.net; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["skript-lsp"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "copyright": "",
+    "shortDescription": "Skript IDE",
+    "longDescription": "Standalone desktop IDE for editing Minecraft Skript scripts."
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

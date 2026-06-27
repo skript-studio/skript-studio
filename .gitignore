@@ -1,0 +1,35 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/skript-lsp-*.exe
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Bun
+bun.lockb
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
