@@ -10,6 +10,7 @@
 //! until the cache is loaded.
 
 use crate::options::EffectiveConfig;
+use include_dir::{include_dir, Dir};
 use skript_core::matching::{EntryTable, SyntaxIndex};
 use skript_core::SyntaxEntry;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +34,29 @@ struct Inner {
     config: RwLock<EffectiveConfig>,
     /// Serializes refresh attempts.
     refresh_lock: Mutex<()>,
+}
+
+const CACHE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/data/skripthub");
+
+/// Load entries from the embedded addon cache, filtering to only the
+/// requested addons. Empty `extra_addons` means only "Skript" entries.
+fn load_addon_files(cache: &Dir, extra_addons: &[String]) -> Vec<SyntaxEntry> {
+    let mut all_entries = Vec::new();
+    for file in cache.files() {
+        let name = match file.path().file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // Always include core "Skript", plus any explicitly requested addons.
+        if name != "Skript" && !extra_addons.contains(&name.to_owned()) {
+            continue;
+        }
+        match serde_json::from_slice::<Vec<SyntaxEntry>>(file.contents()) {
+            Ok(batch) => all_entries.extend(batch),
+            Err(e) => tracing::error!(addon = %name, error = %e, "failed to parse addon file"),
+        }
+    }
+    all_entries
 }
 
 impl AppState {
@@ -115,24 +139,20 @@ impl AppState {
         });
     }
 
-    /// Load syntax data from the embedded cache file, falling back to built-in
-    /// entries when the cache is missing or malformed. Guarded by `refresh_lock`
-    /// so concurrent callers coalesce.
-    const EMBEDDED_CACHE: &[u8] = include_bytes!("../data/skripthub-cache.json");
-
+    /// Load syntax data from the embedded per-addon cache directory, filtering
+    /// to only the requested addons. Guarded by `refresh_lock` so concurrent
+    /// callers coalesce.
     pub async fn refresh(&self) {
         let _guard = self.inner.refresh_lock.lock().await;
 
-        let entries = match serde_json::from_slice::<Vec<SyntaxEntry>>(Self::EMBEDDED_CACHE) {
-            Ok(entries) => {
-                tracing::info!(count = entries.len(), "loaded embedded SkriptHub cache");
-                entries
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "embedded cache malformed — server will be empty");
-                Vec::new()
-            }
-        };
+        let extra = self.config().extra_addons.clone();
+        let entries = load_addon_files(&CACHE_DIR, &extra);
+
+        if entries.is_empty() {
+            tracing::warn!("no syntax entries loaded — server will be empty");
+        } else {
+            tracing::info!(count = entries.len(), "loaded syntax entries from addon cache");
+        }
 
         self.install(entries);
     }
@@ -146,8 +166,6 @@ impl AppState {
         self.inner.ready.store(true, Ordering::Release);
         tracing::info!("syntax index installed; server is ready");
     }
-
-
 }
 
 #[cfg(test)]
