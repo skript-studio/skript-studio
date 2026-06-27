@@ -34,10 +34,10 @@ pub enum PatternToken {
     /// empty alternative. Kept as its own variant so the regex builder can
     /// treat the no-match case correctly.
     CharClass(Vec<char>),
-    /// An alternation between literal strings, e.g. `(add|remove)`.
-    /// Non-literal alternation arms (containing `%`, `[`, `(`) are flattened
-    /// during parsing so every arm is a plain string.
-    Alternation(Vec<String>),
+    /// An alternation, e.g. `(add|remove)` or `([craft]bukkit|minecraft)`.
+    /// Each arm is itself a token sequence, allowing nested char classes,
+    /// type placeholders, and optionals inside alternations.
+    Alternation(Vec<Vec<PatternToken>>),
 }
 
 /// A fully parsed pattern: a flat token sequence plus the original text.
@@ -167,39 +167,57 @@ impl Parser {
         inner.trim().trim_start_matches('-').to_owned()
     }
 
-    /// Consume `(a|b|c)` and return the literal arms. Arms containing `%`, `[`
-    /// or `(` are flattened by recursively parsing them and re-serializing the
-    /// literals, so callers always see plain strings.
-    fn parse_alternation(&mut self) -> Vec<String> {
+    /// Consume `(a|b|c)` and return the parsed token sequences for each arm.
+    /// Each arm is recursively parsed so nested char classes, type placeholders,
+    /// and optionals are properly represented as tokens.
+    fn parse_alternation(&mut self) -> Vec<Vec<PatternToken>> {
         // Consume `(`.
         self.pos += 1;
-        let mut arms: Vec<String> = Vec::new();
-        let mut current = String::new();
+        let mut arms: Vec<Vec<PatternToken>> = Vec::new();
+        let mut current_arm = String::new();
 
         while self.pos < self.chars.len() {
             let c = self.chars[self.pos];
             match c {
                 ')' => {
-                    arms.push(std::mem::take(&mut current).trim().to_owned());
+                    let arm_str = std::mem::take(&mut current_arm);
+                    let trimmed = arm_str.trim().to_owned();
+                    if !trimmed.is_empty() {
+                        arms.push(self.parse_arm_tokens(&trimmed));
+                    }
                     self.pos += 1;
                     break;
                 }
                 '|' => {
-                    arms.push(std::mem::take(&mut current).trim().to_owned());
+                    let arm_str = std::mem::take(&mut current_arm);
+                    let trimmed = arm_str.trim().to_owned();
+                    if !trimmed.is_empty() {
+                        arms.push(self.parse_arm_tokens(&trimmed));
+                    }
                     self.pos += 1;
                 }
                 '\\' if self.pos + 1 < self.chars.len() => {
-                    current.push(self.chars[self.pos + 1]);
+                    current_arm.push(self.chars[self.pos + 1]);
                     self.pos += 2;
                 }
                 _ => {
-                    current.push(c);
+                    current_arm.push(c);
                     self.pos += 1;
                 }
             }
         }
 
-        arms.into_iter().filter(|a| !a.is_empty()).collect()
+        arms
+    }
+
+    /// Parse a single alternation arm's text into tokens by feeding it through
+    /// a fresh sub-parser.
+    fn parse_arm_tokens(&self, arm: &str) -> Vec<PatternToken> {
+        let mut sub = Parser {
+            chars: arm.chars().collect(),
+            pos: 0,
+        };
+        sub.parse_seq(None)
     }
 
     /// Consume `[...]` (optional group) and return its parsed contents.
@@ -327,7 +345,7 @@ fn emit_token(token: &PatternToken, out: &mut String) {
                 if i > 0 {
                     out.push('|');
                 }
-                out.push_str(&whitespace_relaxed(arm));
+                emit_tokens(arm, out);
             }
             out.push_str(")");
         }
@@ -387,9 +405,12 @@ fn collect_type_groups(
                 out.push((ty.clone(), *index));
             }
             PatternToken::Optional(inner) => collect_type_groups(inner, index, out),
-            PatternToken::Literal(_)
-            | PatternToken::CharClass(_)
-            | PatternToken::Alternation(_) => {}
+            PatternToken::Alternation(arms) => {
+                for arm in arms {
+                    collect_type_groups(arm, index, out);
+                }
+            }
+            PatternToken::Literal(_) | PatternToken::CharClass(_) => {}
         }
     }
 }
