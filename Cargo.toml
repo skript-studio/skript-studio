@@ -35,3 +35,7 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+
+# task-2 dependencies
+toml = "0.8"
+include_dir = "0.7"

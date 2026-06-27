@@ -71,6 +71,14 @@ impl Default for LogLevelArg {
     }
 }
 
+/// Schema for `.skriptrc.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SkriptRcToml {
+    /// Addon names the project uses, in addition to core Skript.
+    pub addons: Vec<String>,
+}
+
 /// `initializationOptions` sent by the client. Every field is optional.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -93,12 +101,54 @@ pub struct WorkspaceConfig {
 pub struct EffectiveConfig {
     /// Cap on the number of completion items returned per request.
     pub max_completions: usize,
+    /// Addon names to load syntax for, in addition to always-loaded "Skript".
+    /// Empty = only load core Skript entries.
+    pub extra_addons: Vec<String>,
 }
 
 impl Default for EffectiveConfig {
     fn default() -> Self {
         EffectiveConfig {
             max_completions: 100,
+            extra_addons: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skript_rc_empty_addons() {
+        let rc: SkriptRcToml = toml::from_str("").unwrap();
+        assert!(rc.addons.is_empty());
+    }
+
+    #[test]
+    fn skript_rc_missing_addons_key() {
+        let rc: SkriptRcToml = toml::from_str("other = true").unwrap();
+        assert!(rc.addons.is_empty());
+    }
+
+    #[test]
+    fn skript_rc_with_addons() {
+        let rc: SkriptRcToml = toml::from_str(r#"addons = ["SkBee", "SkQuery"]"#).unwrap();
+        assert_eq!(rc.addons, vec!["SkBee", "SkQuery"]);
+    }
+
+    #[test]
+    fn skript_rc_duplicate_addons() {
+        let rc: SkriptRcToml = toml::from_str(r#"addons = ["SkBee", "SkBee"]"#).unwrap();
+        let mut addons = rc.addons;
+        addons.dedup();
+        assert_eq!(addons, vec!["SkBee"]);
+    }
+
+    #[test]
+    fn effective_config_default_extra_addons_empty() {
+        let cfg = EffectiveConfig::default();
+        assert!(cfg.extra_addons.is_empty());
+        assert_eq!(cfg.max_completions, 100);
     }
 }
