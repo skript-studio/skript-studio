@@ -135,12 +135,25 @@ impl SyntaxIndex {
     /// patterns that consume the entire (trimmed) line are returned. Used for
     /// validation diagnostics to avoid false positives from patterns like
     /// `%boolean%` matching arbitrary lines.
+    ///
+    /// Bare-type patterns (those containing only a type placeholder, e.g.
+    /// `%boolean%`) are skipped because they match every line and produce
+    /// overwhelming false-positive type-mismatch diagnostics.
     pub fn matches_full(&self, line: &str) -> Vec<Match> {
         let trimmed = line.trim_start();
         let leading_ws = line.len() - trimmed.len();
         let mut out = Vec::new();
         for entry in &self.entries {
+            // Skip expression entries: they match arbitrary line content
+            // and produce false-positive type-mismatch diagnostics (e.g.
+            // `name of %player%` matches `name of event-inventory is ...`).
+            if entry.syntax_type == SyntaxType::Expression {
+                continue;
+            }
             for variant in &entry.variants {
+                if variant.compiled.is_bare_type {
+                    continue;
+                }
                 let Some(caps) = variant.compiled.full_regex.captures(trimmed) else {
                     continue;
                 };

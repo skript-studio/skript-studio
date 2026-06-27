@@ -65,7 +65,8 @@ fn validate_line(
     table: &EntryTable,
     out: &mut Vec<Diagnostic>,
 ) {
-    let matches = index.matches_full(line);
+    let code = strip_comment(line);
+    let matches = index.matches_full(code);
 
     if matches.is_empty() {
         let trimmed = line.trim();
@@ -86,8 +87,16 @@ fn validate_line(
         return;
     }
 
+    // If any match has all type checks passing, the line is syntactically
+    // valid. Type mismatches from other overly-broad patterns are likely
+    // false positives (e.g. `send %text% to %player%` captures at the
+    // wrong `to` when the text contains quotes).
+    let line_has_clean_match = matches
+        .iter()
+        .any(|m| m.type_checks.iter().all(|c| matches!(c, TypeCheck::Ok)));
+
     for m in &matches {
-        emit_for_match(m, table, line_idx, out);
+        emit_for_match(m, table, line_idx, out, line_has_clean_match);
     }
 }
 
@@ -96,6 +105,7 @@ fn emit_for_match(
     table: &EntryTable,
     line_idx: u32,
     out: &mut Vec<Diagnostic>,
+    line_has_clean_match: bool,
 ) {
     let Some(entry) = table.get(m.entry_id) else {
         return;
@@ -136,18 +146,23 @@ fn emit_for_match(
         });
     }
 
-    // Type mismatches within the matched arguments.
-    for (i, check) in m.type_checks.iter().enumerate() {
-        if let TypeCheck::Mismatch(reason) = check {
-            out.push(Diagnostic {
-                line: line_idx,
-                start_col: m.span.0 as u32,
-                end_col: m.span.1 as u32,
-                severity: Severity::Warning,
-                source: "skript".to_owned(),
-                code: format!("type-mismatch-{i}"),
-                message: format!("Argument {}: {}", i + 1, reason),
-            });
+    // Type mismatches within the matched arguments. Suppressed when a
+    // different pattern matches the same line cleanly, since the mismatch
+    // likely comes from an overly-broad regex capture (e.g. within quoted
+    // strings containing the separator keyword).
+    if !line_has_clean_match {
+        for (i, check) in m.type_checks.iter().enumerate() {
+            if let TypeCheck::Mismatch(reason) = check {
+                out.push(Diagnostic {
+                    line: line_idx,
+                    start_col: m.span.0 as u32,
+                    end_col: m.span.1 as u32,
+                    severity: Severity::Warning,
+                    source: "skript".to_owned(),
+                    code: format!("type-mismatch-{i}"),
+                    message: format!("Argument {}: {}", i + 1, reason),
+                });
+            }
         }
     }
 }
@@ -155,38 +170,67 @@ fn emit_for_match(
 /// Decide whether a line should not be checked at all.
 ///
 /// Skipped lines: blank, comment-only, section headers (`on ...:`,
-/// `command /x:`, `function ...:`, `trigger:`, `options:`, `if/else/loop/while
-/// ...:`), and bare variable assignments (`set`/`delete`/`add`/`remove` on a
-/// `{...}` variable). The goal is to avoid noisy "unknown syntax" warnings on
-/// structural lines we don't fully parse yet.
+/// `command /x:`, `function ...:`, `trigger:`, `options:`, `aliases:`,
+/// `variables:`, `example:`, `do while ...:`, `if/else/loop/while/for ...:`),
+/// structural keywords (`stop`, `exit`, `cancel event`, `continue`, `return`,
+/// `else`), `using` directives, command meta lines (`permission:`,
+/// `description:`, ...), and multi-line comment blocks (`###`). The goal is to
+/// avoid noisy "unknown syntax" warnings on structural lines we don't fully
+/// parse yet.
 fn should_skip(line: &str) -> bool {
     let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
+    let code = strip_comment(trimmed);
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("###") {
         return true;
     }
-    if is_section_header(trimmed) {
+    if trimmed.starts_with("using ") {
         return true;
     }
-    if is_structural_keyword_line(trimmed) {
+    if is_documentation_line(trimmed) {
+        return true;
+    }
+    if is_section_header(code) {
+        return true;
+    }
+    if is_structural_keyword_line(code) {
+        return true;
+    }
+    if is_command_meta_line(code) {
         return true;
     }
     false
 }
 
+/// Remove inline comments (`# ...` to end of line) so section header
+/// detection and pattern matching work correctly for lines like
+/// `loop {_x} times: # comment`.
+fn strip_comment(s: &str) -> &str {
+    if let Some(pos) = s.find('#') {
+        s[..pos].trim_end()
+    } else {
+        s
+    }
+}
+
 /// Lines that end with `:` and introduce an indented block.
-fn is_section_header(trimmed: &str) -> bool {
-    if !trimmed.ends_with(':') {
+fn is_section_header(code: &str) -> bool {
+    if !code.ends_with(':') {
         return false;
     }
-    let head = trimmed.trim_end_matches(':').trim();
+    let head = code.trim_end_matches(':').trim();
     // `on <event>:`, `command /x:`, `function name(...):`, `trigger:`,
-    // `options:`, plus `if/else/loop/while/for ...:`.
+    // `options:`, `aliases:`, `variables:`, `example:`, `do while ...:`,
+    // plus `if/else/loop/while/for ...:`.
     let lower = head.to_ascii_lowercase();
-    lower.starts_with("on ")
+    lower.starts_with("do while ")
+        || lower.starts_with("on ")
         || lower.starts_with("command ")
         || lower.starts_with("function ")
         || lower == "trigger"
         || lower == "options"
+        || lower == "aliases"
+        || lower == "variables"
+        || lower.starts_with("example")
         || lower.starts_with("if ")
         || lower.starts_with("else if ")
         || lower.starts_with("else")
@@ -203,7 +247,41 @@ fn is_structural_keyword_line(trimmed: &str) -> bool {
     matches!(
         lower.as_str(),
         "else" | "stop" | "exit" | "cancel event" | "continue" | "return"
-    )
+    ) || lower.starts_with("exit ")
+        || lower.starts_with("return ")
+}
+
+/// Lines that look like command meta/property key-value pairs (indented
+/// inside a command definition block).
+fn is_command_meta_line(trimmed: &str) -> bool {
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("permission:")
+        || lower.starts_with("description:")
+        || lower.starts_with("usage:")
+        || lower.starts_with("aliases:")
+        || lower.starts_with("executable by:")
+        || lower.starts_with("cooldown message:")
+        || lower.starts_with("cooldown bypass:")
+        || lower.starts_with("cooldown:")
+}
+
+/// Lines that look like documentation (multi-line comment markers inside
+/// `### ... ###` blocks).
+fn is_documentation_line(trimmed: &str) -> bool {
+    // Multi-line comment markers and separators.
+    if trimmed.starts_with("###") {
+        return true;
+    }
+    if trimmed.chars().all(|c| c == '=') {
+        return true;
+    }
+    // Documentation header lines inside ### blocks (all-caps titles).
+    if trimmed.len() > 4
+        && trimmed.chars().all(|c| c.is_uppercase() || c.is_whitespace())
+    {
+        return true;
+    }
+    false
 }
 
 /// Convenience helper used by hover/completion tests: returns the first entry

@@ -59,6 +59,11 @@ pub struct CompiledPattern {
     /// `(type_name, capture_index)` pairs, one per `%type%` in source order.
     /// Capture indices are 1-based and align with the regex's groups.
     pub type_groups: Vec<(String, usize)>,
+    /// True when the pattern contains only a type placeholder and no literal
+    /// text, optional groups, alternation, or char classes (e.g. `%boolean%`).
+    /// Such patterns are skipped by `matches_full()` to avoid false-positive
+    /// diagnostics, but remain usable for hover/completion.
+    pub is_bare_type: bool,
     pub original: String,
 }
 
@@ -264,10 +269,15 @@ pub fn compile_pattern(parsed: &ParsedPattern) -> Result<CompiledPattern, regex:
     full_builder.case_insensitive(true);
     let full_regex = full_builder.build()?;
 
+    let is_bare_type = parsed.tokens.iter().all(|t| {
+        matches!(t, PatternToken::TypePlaceholder(_))
+    });
+
     Ok(CompiledPattern {
         regex,
         full_regex,
         type_groups: type_groups_for(&parsed.tokens),
+        is_bare_type,
         original: parsed.original.clone(),
     })
 }

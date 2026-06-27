@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 /// The kind of a syntax element. Matches the string values produced by
 /// SkriptHub (`"event"`, `"effect"`, `"condition"`, `"expression"`,
-/// `"section"`, plus a couple of rarer ones we coerce into known variants).
+/// `"section"`, `"function"`, `"structure"`, `"type"`, plus any unknown
+/// values are mapped via `serde(untagged)` fallback to `Other`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyntaxType {
@@ -24,6 +25,9 @@ pub enum SyntaxType {
     Condition,
     Expression,
     Section,
+    Function,
+    Structure,
+    Type,
     /// Catch-all for unknown / future values. Keeps deserialization total.
     Other,
 }
@@ -37,6 +41,9 @@ impl SyntaxType {
             SyntaxType::Condition => "condition",
             SyntaxType::Expression => "expression",
             SyntaxType::Section => "section",
+            SyntaxType::Function => "function",
+            SyntaxType::Structure => "structure",
+            SyntaxType::Type => "type",
             SyntaxType::Other => "other",
         }
     }

@@ -11,7 +11,6 @@
 #[cfg(feature = "fetch")]
 pub mod client;
 pub mod completion;
-pub mod default_syntax;
 pub mod hover;
 pub mod matching;
 pub mod pattern;
