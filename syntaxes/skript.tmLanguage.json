@@ -1,0 +1,105 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Skript",
+  "scopeName": "source.skript",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#color-codes" },
+    { "include": "#strings" },
+    { "include": "#variables" },
+    { "include": "#numbers" },
+    { "include": "#directives" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#delimiter" },
+    { "include": "#brackets" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "match": "#.*$", "name": "comment.line.number-sign.skript" }
+      ]
+    },
+    "color-codes": {
+      "patterns": [
+        { "match": "&[0-9a-fk-orA-FK-OR]", "name": "constant.character.escape.color.skript" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "begin": "\"",
+          "end": "\"",
+          "name": "string.quoted.double.skript",
+          "patterns": [
+            { "match": "\\\\.", "name": "constant.character.escape.skript" },
+            { "include": "#color-codes" }
+          ]
+        },
+        {
+          "begin": "'",
+          "end": "'",
+          "name": "string.quoted.single.skript",
+          "patterns": [
+            { "match": "\\\\.", "name": "constant.character.escape.skript" },
+            { "include": "#color-codes" }
+          ]
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        { "match": "\\{_[a-zA-Z_][\\w:]*\\}", "name": "variable.other.local.skript" },
+        { "match": "\\{[a-zA-Z_][\\w:]*\\}", "name": "variable.other.skript" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "match": "-?\\d+\\.\\d+", "name": "constant.numeric.float.skript" },
+        { "match": "-?\\d+", "name": "constant.numeric.skript" }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        { "match": "\\b(?i:(command|options|variables|aliases|function))\\b(?=.*:)", "name": "keyword.directive.skript" },
+        { "match": "\\/[a-zA-Z][\\w-]*", "name": "entity.name.function.argument.skript" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "match": "\\b(?i:(on))\\b", "name": "keyword.control.event.skript" },
+        {
+          "match": "\\b(?i:(if|else|loop|while|for|return|stop|exit|continue|cancel))\\b",
+          "name": "keyword.control.skript"
+        },
+        {
+          "match": "\\b(?i:(set|delete|add|remove|broadcast|send|make|spawn|teleport|heal|damage|give|execute|wait|play|run|trigger))\\b",
+          "name": "keyword.other.skript"
+        },
+        {
+          "match": "\\b(?i:(player|number|text|string|location|entity|item|boolean|world|gamemode|material|block|object|inventory))\\b",
+          "name": "storage.type.skript"
+        },
+        {
+          "match": "\\b(?i:(join|quit|connect|disconnect|death|respawn|chat|break|place|shoot|drop|pickup|click|sneak|sprint|walk|step on|fall|fly|glide|script load|server load|right click|left click))\\b",
+          "name": "entity.name.tag.event.skript"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "match": "(?i:\\b(and|or|not|is|isn't|contains|between)\\b|>=|<=|!=|==|>|<|=)", "name": "keyword.operator.skript" }
+      ]
+    },
+    "delimiter": {
+      "patterns": [
+        { "match": ":$", "name": "punctuation.colon.skript" }
+      ]
+    },
+    "brackets": {
+      "patterns": [
+        { "match": "[{}()\\[\\]]", "name": "punctuation.section.bracket.skript" }
+      ]
+    }
+  }
+}
