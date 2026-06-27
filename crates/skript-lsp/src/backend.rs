@@ -8,7 +8,7 @@
 //! LSP version: 3.17. We advertise only the capabilities we actually
 //! implement (completion, hover, diagnostics push, semanticTokens/full).
 
-use crate::options::InitOptions;
+use crate::options::{InitOptions, SkriptRcToml};
 use crate::state::AppState;
 use serde_json::Value;
 use skript_core::completion::{self, CompletionContext};
@@ -152,6 +152,42 @@ fn severity_to_lsp(s: Severity) -> DiagnosticSeverity {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> RpcResult<InitializeResult> {
+        // 1. Load .skriptrc.toml from workspace root (if present).
+        if let Some(root_uri) = params
+            .root_uri
+            .as_ref()
+            .or_else(|| {
+                params
+                    .workspace_folders
+                    .as_ref()
+                    .and_then(|f| f.first())
+                    .map(|f| &f.uri)
+            })
+            .and_then(|u| u.to_file_path().ok())
+        {
+            let mut path = root_uri;
+            path.push(".skriptrc.toml");
+            if path.exists() {
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => match toml::from_str::<SkriptRcToml>(&content) {
+                        Ok(rc) => {
+                            let mut cfg = self.state.config();
+                            cfg.extra_addons = rc.addons;
+                            self.state.set_config(cfg);
+                            tracing::info!("loaded .skriptrc.toml");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to parse .skriptrc.toml; ignoring");
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to read .skriptrc.toml; ignoring");
+                    }
+                }
+            }
+        }
+
+        // 2. Apply initializationOptions (highest precedence).
         self.apply_init_options(&params);
 
         let capabilities = ServerCapabilities {
