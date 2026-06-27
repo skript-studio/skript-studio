@@ -339,7 +339,7 @@ fn emit_token(token: &PatternToken, out: &mut String) {
 /// don't force a space.
 fn whitespace_relaxed(literal: &str) -> String {
     if !literal.contains(char::is_whitespace) {
-        return literal.escape_debug().to_string();
+        return regex::escape(literal);
     }
     // Split on runs of whitespace; join with \s+. Empty leading/trailing
     // segments (from leading/trailing spaces) become \s*.
@@ -358,7 +358,7 @@ fn whitespace_relaxed(literal: &str) -> String {
         if i > 0 {
             out.push_str(r"\s+");
         }
-        out.push_str(&part.escape_debug().to_string());
+        out.push_str(&regex::escape(part));
     }
     if ends_ws {
         out.push_str(r"\s*");
