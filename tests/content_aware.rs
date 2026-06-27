@@ -1,12 +1,31 @@
 use std::fs;
 use std::path::Path;
 
-/// Embedded SkriptHub cache loaded at compile time. Uses relative path from
-/// the `skript-core` crate root: `../skript-lsp/data/skripthub-cache.json`.
-const CACHE_BYTES: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../skript-lsp/data/skripthub-cache.json"
-));
+/// Load all SyntaxEntry from the per-addon cache directory.
+fn load_cache() -> Vec<skript_core::SyntaxEntry> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let cache_dir = std::path::Path::new(&manifest_dir)
+        .join("../skript-lsp/data/skripthub");
+
+    let mut all_entries = Vec::new();
+    for entry in std::fs::read_dir(&cache_dir).unwrap_or_else(|_| {
+        panic!("cache directory not found at {:?}; run download-cache script", cache_dir)
+    }) {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().map_or(false, |e| e == "json") {
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+                panic!("failed to read {:?}: {}", path, e)
+            });
+            let entries: Vec<skript_core::SyntaxEntry> =
+                serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                    panic!("failed to parse {:?}: {}", path, e)
+                });
+            all_entries.extend(entries);
+        }
+    }
+    all_entries
+}
 
 /// Walk all `.sk` files under `test-fixtures/SKRIPT_CODE/`, validate them
 /// against the embedded SkriptHub cache, and assert:
@@ -22,8 +41,7 @@ const CACHE_BYTES: &[u8] = include_bytes!(concat!(
 /// fallback syntax set.
 #[test]
 fn content_aware_no_false_positives() {
-    let entries: Vec<skript_core::SyntaxEntry> = serde_json::from_slice(CACHE_BYTES)
-        .expect("failed to parse embedded skripthub-cache.json");
+    let entries = load_cache();
     let index = skript_core::matching::SyntaxIndex::build(&entries);
     let table = skript_core::matching::EntryTable::from_entries(entries);
 
