@@ -112,10 +112,12 @@ impl SyntaxIndex {
                     .type_groups
                     .iter()
                     .map(|(ty, idx)| {
-                        let captured = caps
-                            .get(*idx)
-                            .map(|c| c.as_str())
-                            .unwrap_or("");
+                        let captured = match caps.get(*idx) {
+                            Some(m) => m.as_str(),
+                            None => {
+                                return TypeCheck::Ok;
+                            }
+                        };
                         check_type(ty, captured)
                     })
                     .collect();
@@ -169,10 +171,12 @@ impl SyntaxIndex {
                     .type_groups
                     .iter()
                     .map(|(ty, idx)| {
-                        let captured = caps
-                            .get(*idx)
-                            .map(|c| c.as_str())
-                            .unwrap_or("");
+                        let captured = match caps.get(*idx) {
+                            Some(m) => m.as_str(),
+                            None => {
+                                return TypeCheck::Ok;
+                            }
+                        };
                         check_type(ty, captured)
                     })
                     .collect();

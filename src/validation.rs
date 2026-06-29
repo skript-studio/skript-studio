@@ -390,4 +390,19 @@ mod tests {
         let diags = validate_document(&["set health to Steve"], &index, &table);
         assert!(diags.iter().any(|d| d.code.starts_with("type-mismatch")));
     }
+
+    #[test]
+    fn optional_type_group_without_capture_is_ok() {
+        let (index, table) = build(vec![entry(
+            10,
+            "broadcast %objects% [(to|in) %worlds%]",
+            SyntaxType::Effect,
+        )]);
+        let diags = validate_document(&["broadcast hello"], &index, &table);
+        assert!(
+            !diags.iter().any(|d| d.code.starts_with("type-mismatch")),
+            "got type-mismatch diagnostics: {:?}",
+            diags
+        );
+    }
 }
