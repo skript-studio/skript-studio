@@ -70,6 +70,7 @@ pub enum Token {
     Comma,
     Semicolon,
     Arrow,
+    Pipe,
 
     // Delimiters
     LParen,
@@ -504,6 +505,7 @@ impl Lexer {
             '.' => Token::Dot,
             ',' => Token::Comma,
             ';' => Token::Semicolon,
+            '|' => Token::Pipe,
             '(' => Token::LParen,
             ')' => Token::RParen,
             '[' => Token::LBracket,
@@ -905,6 +907,7 @@ impl Lexer {
                 '.' => Token::Dot,
                 ',' => Token::Comma,
                 ';' => Token::Semicolon,
+                '|' => Token::Pipe,
                 '(' => Token::LParen,
                 ')' => Token::RParen,
                 '[' => Token::LBracket,
