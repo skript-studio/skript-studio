@@ -1,12 +1,14 @@
 use crate::ast::Span;
 use crate::lexer::{SpannedToken, Token};
 
+/// An error produced during parsing with a message and source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub message: String,
     pub span: Span,
 }
 
+/// A recursive-descent parser over a token stream.
 pub struct Parser {
     pub tokens: Vec<SpannedToken>,
     pub pos: usize,
@@ -14,6 +16,7 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// Create a new `Parser` from a vector of tokens.
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
         Parser {
             tokens,
@@ -22,6 +25,7 @@ impl Parser {
         }
     }
 
+    /// Return the current token without consuming it. Returns Eof at end of input.
     pub fn peek(&self) -> SpannedToken {
         self.tokens.get(self.pos).cloned().unwrap_or_else(|| SpannedToken {
             token: Token::Eof,
@@ -29,18 +33,29 @@ impl Parser {
         })
     }
 
+    /// Return the token kind of the current token without consuming it.
     pub fn peek_token(&self) -> Token {
         self.peek().token
     }
 
+    /// Look ahead `n` tokens without consuming. Returns `None` past the end.
     pub fn peek_n(&self, n: usize) -> Option<SpannedToken> {
         self.tokens.get(self.pos + n).cloned()
     }
 
+    /// Consume and return the current token. Returns Eof past end of input.
     pub fn advance(&mut self) -> SpannedToken {
         let tok = self.peek();
         self.pos += 1;
         tok
+    }
+
+    /// Consume and return the current token. Panics at end of input.
+    pub fn next(&mut self) -> SpannedToken {
+        if self.is_at_end() {
+            panic!("called Parser::next at end of input");
+        }
+        self.advance()
     }
 
     /// Consume the current token if it matches `token`.
@@ -69,6 +84,7 @@ impl Parser {
         }
     }
 
+    /// Record a `ParseError` with the given message and span.
     pub fn error(&mut self, message: impl Into<String>, span: Span) {
         self.errors.push(ParseError {
             message: message.into(),
@@ -93,6 +109,7 @@ impl Parser {
         matches!(self.peek_token(), Token::Eof)
     }
 
+    /// Return the list of `ParseError`s recorded so far.
     pub fn errors(&self) -> &[ParseError] {
         &self.errors
     }
