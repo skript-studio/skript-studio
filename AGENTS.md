@@ -25,7 +25,7 @@ cargo test -p skript-core                 # core lib tests (45 pass, 5 pre-exist
 cargo test -p skript-lsp --test smoke -- --ignored --nocapture  # integration: needs server on ws://127.0.0.1:9876
 ```
 
-5 pre-existing test failures in `skript-core` — pattern compiler does not escape regex metacharacters in `whitespace_relaxed()` (uses `escape_debug()` instead of `regex::escape`). Not caused by submodule conversion.
+3 pre-existing test failures in `skript-core` — `partial_prefix_matches`, `normalize_parses_stringified_entries_for_sections`, `deserializes_unknown_syntax_type_to_other`. The `escape_debug()` regex escaping bug was fixed in commit `2ddee04`.
 
 ## Extension (VSCode)
 
