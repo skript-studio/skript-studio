@@ -693,11 +693,16 @@ pub fn walk_statement<V: Visitor + ?Sized>(visitor: &mut V, statement: &Statemen
             for stmt in &s.body {
                 visitor.visit_statement(stmt);
             }
-            for stmt in &s.else_if {
-                visitor.visit_statement(&Statement::ElseIf(stmt.clone()));
+            for elif in &s.else_if {
+                visitor.visit_expression(&elif.condition);
+                for stmt in &elif.body {
+                    visitor.visit_statement(stmt);
+                }
             }
-            if let Some(ref eb) = s.else_branch {
-                visitor.visit_statement(&Statement::Else(*eb.clone()));
+            if let Some(ref el) = s.else_branch {
+                for stmt in &el.body {
+                    visitor.visit_statement(stmt);
+                }
             }
         }
         Statement::ElseIf(s) => {

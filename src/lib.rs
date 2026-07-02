@@ -8,6 +8,7 @@
 //! This crate is deliberately free of LSP concerns so it can be reused by a
 //! CLI validator, tests, or any other embedding.
 
+pub mod ast;
 #[cfg(feature = "fetch")]
 pub mod client;
 pub mod completion;
