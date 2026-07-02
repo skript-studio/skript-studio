@@ -63,7 +63,7 @@ fn token_to_binary_op(token: &Token) -> BinaryOp {
         Token::Keyword("in") => BinaryOp::In,
         Token::Keyword("instanceof") => BinaryOp::InstanceOf,
         Token::Identifier(s) if s == "instanceof" => BinaryOp::InstanceOf,
-        _ => panic!("token_to_binary_op: unexpected token {:?}", token),
+        _ => unreachable!("token_to_binary_op: unexpected token {:?}", token),
     }
 }
 
