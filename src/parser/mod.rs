@@ -117,3 +117,6 @@ impl Parser {
 
 pub mod decl;
 pub use decl::parse_top_level_item;
+
+pub mod expr;
+pub use expr::parse_expression;
