@@ -77,13 +77,15 @@ fn reconstruct_text(tokens: &[SpannedToken]) -> String {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Consume an `Identifier` or `Keyword` token and return its text.
+/// Consume an `Identifier`, `Keyword`, `Variable`, or `EventValue` token and
+/// return its text.
 fn parse_identifier_or_keyword(parser: &mut Parser, error_msg: &str) -> String {
     let tok = parser.peek();
     let text = match &tok.token {
         Token::Identifier(s) => s.clone(),
         Token::Keyword(s) => s.to_string(),
         Token::EventValue(s) => s.clone(),
+        Token::Variable(parts) => parts.join("::"),
         _ => {
             parser.error(error_msg, tok.span);
             return String::new();

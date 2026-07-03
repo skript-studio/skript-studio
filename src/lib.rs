@@ -22,4 +22,5 @@ pub mod tokens;
 pub mod types;
 pub mod validation;
 
+pub use parser::parse_program;
 pub use syntax::{Addon, Plugin, SyntaxEntry, SyntaxType};
