@@ -17,6 +17,7 @@ pub mod lexer;
 pub mod matching;
 pub mod parser;
 pub mod pattern;
+pub mod semantic;
 pub mod syntax;
 pub mod tokens;
 pub mod types;
