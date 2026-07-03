@@ -82,6 +82,7 @@ pub fn parse_statement(parser: &mut Parser) -> Statement {
         }
         Token::Keyword("cancel") => parse_cancel_event(parser),
         Token::Keyword("wait") => parse_wait(parser),
+        Token::Keyword("do") => parse_do_while(parser),
         _ => parse_effect_statement(parser),
     }
 }
@@ -233,6 +234,75 @@ fn parse_while(parser: &mut Parser) -> Statement {
     Statement::While(WhileStmt {
         condition,
         body,
+        span: Span::new(start.start, parser.peek().span.start),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Do-While
+// ---------------------------------------------------------------------------
+
+fn parse_do_while(parser: &mut Parser) -> Statement {
+    let do_token = parser.advance();
+    let start = do_token.span;
+
+    // "do:" — bare do block (execute body once)
+    if matches!(parser.peek_token(), Token::Colon) {
+        parser.advance();
+        let body = parse_block_body(parser);
+        let end = parser.peek().span.start;
+        return Statement::DoWhile(DoWhileStmt {
+            condition: Expression::Literal(Literal::Boolean(BooleanLiteral {
+                value: true,
+                span: Span::new(start.start, end),
+            })),
+            body,
+            span: Span::new(start.start, end),
+        });
+    }
+
+    // "do <effect>" — fall back to effect
+    if !matches!(parser.peek_token(), Token::Keyword("while")) {
+        let effect = "do".to_string();
+        let mut args = Vec::new();
+        while !matches!(
+            parser.peek_token(),
+            Token::Newline | Token::Dedent | Token::Eof | Token::Colon
+        ) {
+            args.push(parse_expression(parser));
+        }
+        let end = args.last().map(|e| span_of(e).end).unwrap_or(start.end);
+        return Statement::Effect(EffectStmt {
+            effect,
+            arguments: args,
+            span: Span::new(start.start, end),
+        });
+    }
+
+    parser.advance(); // consume "while"
+
+    // "do while:" — no condition provided
+    if matches!(parser.peek_token(), Token::Colon) {
+        parser.advance();
+        let body = parse_block_body(parser);
+        let end = parser.peek().span.start;
+        return Statement::DoWhile(DoWhileStmt {
+            condition: Expression::Literal(Literal::Boolean(BooleanLiteral {
+                value: true,
+                span: Span::new(start.start, end),
+            })),
+            body,
+            span: Span::new(start.start, end),
+        });
+    }
+
+    let condition = parse_expression(parser);
+    parser.expect(&Token::Colon);
+    let body = parse_block_body(parser);
+
+    Statement::DoWhile(DoWhileStmt {
+        body,
+        condition,
         span: Span::new(start.start, parser.peek().span.start),
     })
 }
