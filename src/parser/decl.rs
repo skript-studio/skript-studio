@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::lexer::{SpannedToken, Token};
+use crate::parser::stmt::parse_block_body;
 use crate::parser::Parser;
 
 // ---------------------------------------------------------------------------
@@ -124,57 +125,6 @@ fn collect_line_tokens(parser: &mut Parser) -> Vec<SpannedToken> {
         toks.push(parser.advance());
     }
     toks
-}
-
-// ---------------------------------------------------------------------------
-// Block body placeholder
-// ---------------------------------------------------------------------------
-
-/// Parse an indented block of statements returning placeholder
-/// `Expression::Unknown` nodes.
-///
-/// The real statement / expression parser (Tasks 1.4–1.6) will replace this.
-fn parse_block_body(parser: &mut Parser) -> Vec<Statement> {
-    let mut statements = Vec::new();
-
-    if matches!(parser.peek_token(), Token::Newline) {
-        parser.advance();
-    }
-
-    if !matches!(parser.peek_token(), Token::Indent) {
-        return statements;
-    }
-
-    parser.advance();
-
-    while !matches!(parser.peek_token(), Token::Dedent | Token::Eof) {
-        let line_tokens = collect_line_tokens(parser);
-
-        if line_tokens.is_empty() {
-            if matches!(parser.peek_token(), Token::Newline) {
-                parser.advance();
-            }
-            continue;
-        }
-
-        let content = reconstruct_text(&line_tokens);
-        let span = Span::new(
-            line_tokens.first().unwrap().span.start,
-            line_tokens.last().unwrap().span.end,
-        );
-
-        statements.push(Statement::Expression(Expression::Unknown(UnknownExpr {
-            content,
-            span,
-        })));
-
-        if matches!(parser.peek_token(), Token::Newline) {
-            parser.advance();
-        }
-    }
-
-    parser.expect(&Token::Dedent);
-    statements
 }
 
 // ---------------------------------------------------------------------------

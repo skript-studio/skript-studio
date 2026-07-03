@@ -120,3 +120,6 @@ pub use decl::parse_top_level_item;
 
 pub mod expr;
 pub use expr::parse_expression;
+
+pub mod stmt;
+pub use stmt::{parse_block_body, parse_statement};
