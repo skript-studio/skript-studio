@@ -17,6 +17,7 @@ pub mod lexer;
 pub mod matching;
 pub mod parser;
 pub mod pattern;
+pub mod references;
 pub mod semantic;
 pub mod syntax;
 pub mod tokens;
@@ -25,3 +26,5 @@ pub mod validation;
 
 pub use parser::parse_program;
 pub use syntax::{Addon, Plugin, SyntaxEntry, SyntaxType};
+
+pub use completion::{complete_keywords, complete_variables, complete_functions};
