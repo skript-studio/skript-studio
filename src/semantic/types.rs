@@ -16,6 +16,7 @@ pub enum TypeInfo {
 }
 
 /// Maps AST nodes to their inferred types.
+#[derive(Debug)]
 pub struct TypeInference {
     pub expr_types: HashMap<usize, TypeInfo>,
     pub errors: Vec<String>,
