@@ -19,11 +19,13 @@ use tower_lsp::jsonrpc::Result as RpcResult;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, Hover, HoverContents, HoverProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, InsertTextFormat, MarkupContent, MarkupKind, Position,
-    Range, SemanticToken, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    Hover, HoverContents, HoverProviderCapability, InitializeParams,
+    InitializeResult, InitializedParams, InsertTextFormat, MarkupContent, MarkupKind, OneOf,
+    Position, Range, SemanticToken, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
-    SemanticTokenType, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    SemanticTokenType, ServerCapabilities, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -101,15 +103,14 @@ impl Backend {
         let Some(text) = self.state.get_doc(uri) else {
             return;
         };
+
+        // AST-based validation from cached snapshot
         let diags = self
             .state
-            .with_index(|index, table| {
-                let lines: Vec<&str> = text.lines().collect();
-                validation::validate_document(&lines, index, table)
-                    .into_iter()
+            .with_snapshot(uri, |snap| {
+                validation::validate_analysis(&snap.parse_result, &snap.analysis, &text)
             })
-            .map(|d| d.collect::<Vec<_>>())
-            .unwrap_or_default();
+            .unwrap_or_else(|| validation::validate_program(&text));
 
         let lsp_diags: Vec<Diagnostic> = diags
             .into_iter()
@@ -209,6 +210,7 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 },
             )),
+            document_symbol_provider: Some(OneOf::Left(true)),
             // Explicitly NOT advertising: definition, references, rename,
             // formatting, code_action, signature_help.
             ..Default::default()
@@ -295,10 +297,44 @@ impl LanguageServer for Backend {
         let ctx = infer_context(line);
 
         let max = self.state.config().max_completions;
-        let items = self
+        let mut items: Vec<skript_core::completion::CompletionItem> = self
             .state
             .with_index(|_index, table| completion::completions(prefix, ctx, table, max))
             .unwrap_or_default();
+
+        // Add AST-aware completions in body context using cached snapshot
+        if ctx == CompletionContext::Body {
+            if let Some(snap_items) = self.state.with_snapshot(&uri, |snap| {
+                let mut extra = Vec::new();
+                extra.extend(completion::complete_keywords(prefix));
+                extra.extend(completion::complete_variables(
+                    prefix,
+                    &snap.analysis,
+                    &text,
+                    pos.line,
+                ));
+                extra.extend(completion::complete_functions(
+                    prefix,
+                    &snap.analysis.function_registry,
+                ));
+                extra
+            }) {
+                items.extend(snap_items);
+            }
+        }
+
+        // Deduplicate by label+insert_text
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        items.retain(|it| seen.insert(format!("{}|{}", it.label, it.insert_text)));
+
+        // Sort: sort_bucket asc, usage_score desc, label asc
+        items.sort_by(|a, b| {
+            a.sort_bucket
+                .cmp(&b.sort_bucket)
+                .then_with(|| b.usage_score.partial_cmp(&a.usage_score).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        items.truncate(max);
 
         let lsp_items: Vec<CompletionItem> = items
             .into_iter()
@@ -335,11 +371,22 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let Some(info) = self
+        // 1. Old: syntax docs from SkriptHub (fallback)
+        let syntax_hover = self
             .state
             .with_index(|index, table| hover::hover_at(line, pos.character, index, table))
-            .flatten()
-        else {
+            .flatten();
+
+        // 2. New: AST-resolved hover using cached snapshot (takes priority — more precise)
+        let ast_hover = self.state.with_snapshot(&uri, |snap| {
+            hover::hover_at_ast(&text, pos.line, pos.character, &snap.parse_result.program, &snap.analysis)
+        }).flatten();
+
+        let info = ast_hover
+            .map(|a| hover::HoverInfo { markdown: a.markdown, range: a.range })
+            .or(syntax_hover);
+
+        let Some(info) = info else {
             return Ok(None);
         };
 
@@ -371,6 +418,30 @@ impl LanguageServer for Backend {
         })))
     }
 
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> RpcResult<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let result = self
+            .state
+            .with_snapshot(&uri, |s| {
+                let program = &s.parse_result.program;
+                let mut symbols = Vec::new();
+                for item in &program.items {
+                    if let Some(sym) = top_level_to_document_symbol(item, &text) {
+                        symbols.push(sym);
+                    }
+                }
+                symbols
+            })
+            .unwrap_or_default();
+        Ok(Some(DocumentSymbolResponse::Nested(result)))
+    }
+
     async fn shutdown(&self) -> RpcResult<()> {
         tracing::info!("shutdown requested");
         Ok(())
@@ -396,6 +467,87 @@ fn infer_context(line: &str) -> CompletionContext {
         CompletionContext::Body
     } else {
         CompletionContext::TopLevel
+    }
+}
+
+/// Convert a byte-offset `Span` to an LSP `Range`.
+fn span_to_range(source: &str, span: skript_core::ast::Span) -> Range {
+    let (start_line, start_col) =
+        skript_core::validation::offset_to_linecol(source, span.start);
+    let (end_line, end_col) =
+        skript_core::validation::offset_to_linecol(source, span.end);
+    Range::new(
+        Position::new(start_line, start_col),
+        Position::new(end_line, end_col),
+    )
+}
+
+/// Convert a `TopLevelItem` into an LSP `DocumentSymbol` for the outline view.
+fn top_level_to_document_symbol(
+    item: &skript_core::ast::TopLevelItem,
+    source: &str,
+) -> Option<DocumentSymbol> {
+    match item {
+        skript_core::ast::TopLevelItem::Function(f) => {
+            let range = span_to_range(source, f.span);
+            Some(DocumentSymbol {
+                name: f.name.clone(),
+                detail: Some(format!(
+                    "function({})",
+                    f.parameters
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+                kind: SymbolKind::FUNCTION,
+                range,
+                selection_range: range,
+                children: Some(vec![]),
+                deprecated: None,
+                tags: None,
+            })
+        }
+        skript_core::ast::TopLevelItem::Command(c) => {
+            let range = span_to_range(source, c.span);
+            Some(DocumentSymbol {
+                name: c.name.clone(),
+                detail: Some("command".to_owned()),
+                kind: SymbolKind::FUNCTION,
+                range,
+                selection_range: range,
+                children: Some(vec![]),
+                deprecated: None,
+                tags: None,
+            })
+        }
+        skript_core::ast::TopLevelItem::Event(e) => {
+            let range = span_to_range(source, e.span);
+            Some(DocumentSymbol {
+                name: format!("on {}", e.event_type),
+                detail: Some("event".to_owned()),
+                kind: SymbolKind::EVENT,
+                range,
+                selection_range: range,
+                children: Some(vec![]),
+                deprecated: None,
+                tags: None,
+            })
+        }
+        skript_core::ast::TopLevelItem::PeriodicEvent(e) => {
+            let range = span_to_range(source, e.span);
+            Some(DocumentSymbol {
+                name: format!("every {}", e.period),
+                detail: Some("periodic event".to_owned()),
+                kind: SymbolKind::EVENT,
+                range,
+                selection_range: range,
+                children: Some(vec![]),
+                deprecated: None,
+                tags: None,
+            })
+        }
+        _ => None,
     }
 }
 
