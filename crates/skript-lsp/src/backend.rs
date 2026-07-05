@@ -8,6 +8,7 @@
 //! LSP version: 3.17. We advertise only the capabilities we actually
 //! implement (completion, hover, diagnostics push, semanticTokens/full).
 
+use crate::folding;
 use crate::options::{InitOptions, SkriptRcToml};
 use crate::state::AppState;
 use serde_json::Value;
@@ -20,12 +21,13 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    Hover, HoverContents, HoverProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, InsertTextFormat, MarkupContent, MarkupKind, OneOf,
-    Position, Range, SemanticToken, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
-    SemanticTokenType, ServerCapabilities, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind,
+    FoldingRange, FoldingRangeParams, Hover, HoverContents, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, MarkupContent,
+    MarkupKind, OneOf, Position, Range, SemanticToken, SemanticTokens, SemanticTokensFullOptions,
+    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
+    SemanticTokensServerCapabilities, SemanticTokenType, ServerCapabilities, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind,
+    FoldingRangeProviderCapability,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -211,6 +213,7 @@ impl LanguageServer for Backend {
                 },
             )),
             document_symbol_provider: Some(OneOf::Left(true)),
+            folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
             // Explicitly NOT advertising: definition, references, rename,
             // formatting, code_action, signature_help.
             ..Default::default()
@@ -440,6 +443,18 @@ impl LanguageServer for Backend {
             })
             .unwrap_or_default();
         Ok(Some(DocumentSymbolResponse::Nested(result)))
+    }
+
+    async fn folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> RpcResult<Option<Vec<FoldingRange>>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let ranges = folding::compute_folding_ranges(&text);
+        Ok(Some(ranges))
     }
 
     async fn shutdown(&self) -> RpcResult<()> {

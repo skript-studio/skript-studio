@@ -20,6 +20,7 @@
 //!   4. Enter the selected transport loop.
 
 mod backend;
+mod folding;
 mod options;
 mod state;
 mod ws;
