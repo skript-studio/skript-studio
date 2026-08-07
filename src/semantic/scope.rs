@@ -37,6 +37,20 @@ pub enum SymbolKind {
     LoopVariable,
 }
 
+impl SymbolKind {
+    /// Human-readable description of this symbol kind.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            SymbolKind::Variable => "Local variable",
+            SymbolKind::Parameter => "Parameter",
+            SymbolKind::Function => "Function",
+            SymbolKind::Command => "Command",
+            SymbolKind::Event => "Event",
+            SymbolKind::LoopVariable => "Loop variable",
+        }
+    }
+}
+
 /// A declared symbol in a scope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Symbol {
@@ -63,6 +77,9 @@ pub struct Scope {
     pub symbols: HashMap<String, Symbol>,
     /// An optional human-readable name for this scope.
     pub name: Option<String>,
+    /// The byte span of this scope's AST node, if any.
+    /// Used for offset-based scope lookup.
+    pub span: Option<Span>,
 }
 
 /// A scope tree for a complete Skript program.
@@ -86,6 +103,7 @@ impl ScopeTree {
             children: Vec::new(),
             symbols: HashMap::new(),
             name: None,
+            span: None,
         }];
         ScopeTree { scopes, root: 0 }
     }
@@ -98,6 +116,7 @@ impl ScopeTree {
         parent: usize,
         kind: ScopeKind,
         name: Option<String>,
+        span: Option<Span>,
     ) -> usize {
         let idx = self.scopes.len();
         self.scopes.push(Scope {
@@ -106,6 +125,7 @@ impl ScopeTree {
             children: Vec::new(),
             symbols: HashMap::new(),
             name,
+            span,
         });
         self.scopes[parent].children.push(idx);
         idx
@@ -174,6 +194,25 @@ impl ScopeTree {
             self.collect_symbols(child, result);
         }
     }
+
+    /// Find the deepest scope whose span contains the given byte offset.
+    /// Falls back to the root scope if no matching span is found.
+    pub fn scope_at_offset(&self, offset: usize) -> usize {
+        self.scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, scope)| {
+                let s = scope.span?;
+                if offset >= s.start && offset <= s.end {
+                    Some((idx, s.end - s.start))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|&(_, size)| size)
+            .map(|(idx, _)| idx)
+            .unwrap_or(self.root)
+    }
 }
 
 impl Default for ScopeTree {
@@ -229,6 +268,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Function,
                     Some(f.name.clone()),
+                    Some(f.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = func_scope;
@@ -256,6 +296,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Command,
                     Some(cmd.name.clone()),
+                    Some(cmd.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = cmd_scope;
@@ -283,6 +324,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Event,
                     Some(evt.event_type.clone()),
+                    Some(evt.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = evt_scope;
@@ -298,6 +340,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Event,
                     Some(evt.period.clone()),
+                    Some(evt.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = evt_scope;
@@ -319,6 +362,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Block,
                     None,
+                    Some(s.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = if_scope;
@@ -334,6 +378,7 @@ impl Visitor for ScopeTreeBuilder {
                         self.current_scope,
                         ScopeKind::Block,
                         None,
+                        Some(elif.span),
                     );
                     self.current_scope = elif_scope;
 
@@ -349,6 +394,7 @@ impl Visitor for ScopeTreeBuilder {
                         self.current_scope,
                         ScopeKind::Block,
                         None,
+                        Some(el.span),
                     );
                     self.current_scope = else_scope;
 
@@ -364,6 +410,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Block,
                     None,
+                    Some(s.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = scope;
@@ -379,6 +426,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Block,
                     None,
+                    Some(s.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = scope;
@@ -394,6 +442,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Block,
                     Some(s.variable.clone()),
+                    Some(s.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = scope;
@@ -419,6 +468,7 @@ impl Visitor for ScopeTreeBuilder {
                     self.current_scope,
                     ScopeKind::Block,
                     None,
+                    Some(s.span),
                 );
                 let parent = self.current_scope;
                 self.current_scope = scope;

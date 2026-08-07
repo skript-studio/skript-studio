@@ -124,6 +124,11 @@ impl FunctionRegistry {
     pub fn get(&self, name: &str) -> Option<&FunctionInfo> {
         self.functions.get(name)
     }
+
+    /// Iterate over all registered functions.
+    pub fn functions(&self) -> impl Iterator<Item = &FunctionInfo> {
+        self.functions.values()
+    }
 }
 
 impl Default for FunctionRegistry {

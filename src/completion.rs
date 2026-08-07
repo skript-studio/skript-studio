@@ -6,6 +6,8 @@
 //! matches and addons with higher `usage_score`.
 
 use crate::matching::EntryTable;
+use crate::semantic::{FunctionRegistry, SemanticAnalysis};
+use crate::semantic::scope::SymbolKind;
 use crate::syntax::{SyntaxEntry, SyntaxType};
 use std::collections::HashSet;
 
@@ -88,6 +90,150 @@ pub fn completions(
 
     items.truncate(max);
     items
+}
+
+/// Completion items for structural keywords available in body context.
+pub fn complete_keywords(prefix: &str) -> Vec<CompletionItem> {
+    let keywords: &[(&str, &str, &str)] = &[
+        ("if", "if ${1:condition}:", "Conditional section"),
+        ("else if", "else if ${1:condition}:", "Else-if branch"),
+        ("else", "else:", "Else branch"),
+        ("while", "while ${1:condition}:", "While loop"),
+        ("do while", "do while ${1:condition}:", "Do-while loop"),
+        ("loop", "loop ${1:items}:", "Loop through items"),
+        ("for each", "for each ${1:variable} in ${2:items}:", "For-each loop"),
+        ("set", "set ${1:variable} to ${2:value}", "Set variable"),
+        ("delete", "delete ${1:variable}", "Delete variable"),
+        ("add", "add ${1:value} to ${2:variable}", "Add to variable"),
+        ("remove", "remove ${1:value} from ${2:variable}", "Remove from variable"),
+    ];
+
+    let prefix_lower = prefix.trim().to_lowercase();
+    let mut items: Vec<CompletionItem> = keywords.iter()
+        .filter(|(label, _, _)| {
+            prefix_lower.is_empty() || label.starts_with(&prefix_lower)
+        })
+        .map(|(label, insert, detail)| CompletionItem {
+            label: label.to_string(),
+            insert_text: insert.to_string(),
+            filter_text: label.to_string(),
+            detail: detail.to_string(),
+            documentation: String::new(),
+            entry_id: 0,
+            sort_bucket: if *label == prefix_lower { 0 } else { 1 },
+            usage_score: 0.0,
+        })
+        .collect();
+
+    items.sort_by(|a, b| a.sort_bucket.cmp(&b.sort_bucket).then(a.label.cmp(&b.label)));
+    items
+}
+
+/// Completion items for in-scope variables (local, parameters, globals).
+pub fn complete_variables(
+    prefix: &str,
+    analysis: &SemanticAnalysis,
+    source: &str,
+    line: u32,
+) -> Vec<CompletionItem> {
+    let byte_offset = linecol_to_offset(source, line, 0);
+    let scope_id = analysis.scope_tree.scope_at_offset(byte_offset);
+
+    let prefix_lower = prefix.trim().to_lowercase();
+    let mut items = Vec::new();
+    let mut seen_names = HashSet::new();
+
+    let mut current = Some(scope_id);
+    while let Some(idx) = current {
+        let scope = &analysis.scope_tree.scopes[idx];
+        for sym in scope.symbols.values() {
+            match sym.kind {
+                SymbolKind::Variable | SymbolKind::Parameter | SymbolKind::LoopVariable => {
+                    let var_label = format!("{{{}}}", sym.name);
+                    let matches = prefix_lower.is_empty()
+                        || var_label.to_lowercase().starts_with(&prefix_lower)
+                        || sym.name.to_lowercase().starts_with(&prefix_lower);
+                    if matches && seen_names.insert(sym.name.clone()) {
+                        items.push(CompletionItem {
+                            label: var_label,
+                            insert_text: format!("{{{}}}", sym.name),
+                            filter_text: sym.name.clone(),
+                            detail: format!("{} \u{2014} Skript", sym.kind.describe()),
+                            documentation: String::new(),
+                            entry_id: 0,
+                            sort_bucket: 1,
+                            usage_score: 0.0,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        current = scope.parent;
+    }
+
+    items
+}
+
+/// Completion items for function calls in body context.
+pub fn complete_functions(
+    prefix: &str,
+    registry: &FunctionRegistry,
+) -> Vec<CompletionItem> {
+    let prefix_lower = prefix.trim().to_lowercase();
+    let mut items = Vec::new();
+
+    for func in registry.functions() {
+        let name = &func.name;
+        if !prefix_lower.is_empty() && !name.to_lowercase().starts_with(&prefix_lower) {
+            continue;
+        }
+
+        let params: Vec<&str> = func.decl.parameters.iter().map(|p| p.name.as_str()).collect();
+        let sig = params.join(", ");
+        let insert = if params.is_empty() {
+            format!("{}()", name)
+        } else {
+            let snippet_params: Vec<String> = params.iter().enumerate()
+                .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
+                .collect();
+            format!("{}({})", name, snippet_params.join(", "))
+        };
+
+        items.push(CompletionItem {
+            label: format!("{}()", name),
+            insert_text: insert,
+            filter_text: name.clone(),
+            detail: format!("function({}) \u{2014} Skript", sig),
+            documentation: String::new(),
+            entry_id: 0,
+            sort_bucket: if name.eq_ignore_ascii_case(&prefix_lower) { 0 } else { 1 },
+            usage_score: 0.0,
+        });
+    }
+
+    items.sort_by(|a, b| a.sort_bucket.cmp(&b.sort_bucket).then(a.label.cmp(&b.label)));
+    items
+}
+
+/// Convert (line, column) to byte offset. Both are 0-based.
+pub fn linecol_to_offset(source: &str, line: u32, column: u32) -> usize {
+    let mut current_line = 0u32;
+    let mut offset = 0usize;
+    for (i, c) in source.char_indices() {
+        if current_line == line {
+            offset = i + column as usize;
+            break;
+        }
+        if c == '\n' {
+            current_line += 1;
+        }
+    }
+    if current_line < line {
+        source.len()
+    } else {
+        offset.min(source.len())
+    }
 }
 
 /// Only effects/conditions/expressions are useful in bodies; everything but
@@ -363,5 +509,102 @@ mod tests {
         ]);
         let items = completions("send", CompletionContext::Body, &table, 2);
         assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn test_complete_keywords_prefix() {
+        let items = complete_keywords("if");
+        assert!(items.iter().any(|i| i.label == "if"));
+        assert!(!items.iter().any(|i| i.label == "set"));
+    }
+
+    #[test]
+    fn test_complete_keywords_empty_prefix() {
+        let items = complete_keywords("");
+        assert!(items.len() >= 11);
+        assert!(items.iter().any(|i| i.label == "if"));
+        assert!(items.iter().any(|i| i.label == "set"));
+    }
+
+    #[test]
+    fn test_complete_keywords_partial_prefix() {
+        let items = complete_keywords("el");
+        assert!(items.iter().any(|i| i.label == "else"));
+        assert!(items.iter().any(|i| i.label == "else if"));
+        assert!(!items.iter().any(|i| i.label == "if"));
+    }
+
+    #[test]
+    fn test_complete_keywords_exact_first() {
+        let items = complete_keywords("if");
+        assert_eq!(items[0].sort_bucket, 0);
+        assert_eq!(items[0].label, "if");
+    }
+
+    #[test]
+    fn test_complete_functions_no_match() {
+        let registry = FunctionRegistry::new();
+        let items = complete_functions("zzz", &registry);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_complete_functions_with_params() {
+        let mut registry = FunctionRegistry::new();
+        registry.register(&crate::ast::FunctionDecl {
+            name: "greet".into(),
+            parameters: vec![crate::ast::Parameter {
+                name: "name".into(),
+                type_: None,
+                default: None,
+                span: crate::ast::Span::new(0, 4),
+            }],
+            return_type: None,
+            body: vec![],
+            span: crate::ast::Span::new(0, 0),
+        }).ok();
+        let items = complete_functions("", &registry);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "greet()");
+        assert!(items[0].insert_text.contains("${1:name}"));
+    }
+
+    #[test]
+    fn test_complete_variables_empty_prefix() {
+        let source = "function test():\n\tset {_x} to 5\n\tset {_y} to 10\n\t# cursor";
+        let parse_result = crate::parser::parse_program(source);
+        let analysis = crate::semantic::analyze(&parse_result.program);
+        let items = complete_variables("", &analysis, source, 3);
+        assert!(items.iter().any(|i| i.label == "{_x}"));
+        assert!(items.iter().any(|i| i.label == "{_y}"));
+    }
+
+    #[test]
+    fn test_complete_variables_parameter_included() {
+        let source = "function greet(name: text):\n\t# cursor";
+        let parse_result = crate::parser::parse_program(source);
+        let analysis = crate::semantic::analyze(&parse_result.program);
+        let items = complete_variables("", &analysis, source, 1);
+        assert!(items.iter().any(|i| i.label == "{name}"));
+        assert!(items.iter().any(|i| i.detail.contains("Parameter")));
+    }
+
+    #[test]
+    fn test_complete_variables_filter_by_prefix() {
+        let source = "function test():\n\tset {_abc} to 5\n\tset {_xyz} to 10\n\t# cursor";
+        let parse_result = crate::parser::parse_program(source);
+        let analysis = crate::semantic::analyze(&parse_result.program);
+        let items = complete_variables("{_a", &analysis, source, 3);
+        assert!(items.iter().any(|i| i.label == "{_abc}"));
+        assert!(!items.iter().any(|i| i.label == "{_xyz}"));
+    }
+
+    #[test]
+    fn test_linecol_to_offset() {
+        let source = "line0\nline1\nline2";
+        assert_eq!(linecol_to_offset(source, 0, 0), 0);
+        assert_eq!(linecol_to_offset(source, 1, 0), 6);
+        assert_eq!(linecol_to_offset(source, 2, 0), 12);
+        assert_eq!(linecol_to_offset(source, 5, 0), source.len());
     }
 }
