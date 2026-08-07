@@ -7,7 +7,7 @@
 //!
 //! LSP version: 3.17. We advertise only the capabilities we actually
 //! implement (completion, hover, diagnostics push, semanticTokens/full,
-//! document symbols, folding, go-to-definition, references).
+//! document symbols, folding, go-to-definition, references, signature help).
 
 use crate::folding;
 use crate::options::{InitOptions, SkriptRcToml};
@@ -26,10 +26,12 @@ use tower_lsp::lsp_types::{
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
     InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
-    MarkupContent, MarkupKind, OneOf, Position, Range, ReferenceParams, SemanticToken, SemanticTokens,
-    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensResult, SemanticTokensServerCapabilities, SemanticTokenType,
-    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
+    MarkupContent, MarkupKind, OneOf, ParameterInformation, ParameterLabel, Position, Range,
+    ReferenceParams, SemanticToken, SemanticTokens, SemanticTokensFullOptions,
+    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
+    SemanticTokensServerCapabilities, SemanticTokenType, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SignatureInformation,
+    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -218,8 +220,12 @@ impl LanguageServer for Backend {
             folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
             definition_provider: Some(OneOf::Left(true)),
             references_provider: Some(OneOf::Left(true)),
-            // Explicitly NOT advertising: rename, formatting, code_action,
-            // signature_help.
+            signature_help_provider: Some(SignatureHelpOptions {
+                trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+                retrigger_characters: Some(vec![",".to_owned()]),
+                ..Default::default()
+            }),
+            // Explicitly NOT advertising: rename, formatting, code_action.
             ..Default::default()
         };
 
@@ -532,6 +538,64 @@ impl LanguageServer for Backend {
         Ok(locations)
     }
 
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> RpcResult<Option<SignatureHelp>> {
+        let uri = params.text_document_position_params.text_document.uri.to_string();
+        let pos = params.text_document_position_params.position;
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+
+        let (func_name, active_param) = match find_function_call_context(&text, offset) {
+            Some(ctx) => ctx,
+            None => return Ok(None),
+        };
+
+        // Resolve the called function via the cached snapshot and build a
+        // signature from its declared parameters. Falls back to `None` when
+        // the cursor isn't inside a known user-defined function call.
+        let info = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                let func = snap.analysis.function_registry.get(&func_name)?;
+                let sig_params: Vec<ParameterInformation> = func
+                    .decl
+                    .parameters
+                    .iter()
+                    .map(|p| ParameterInformation {
+                        label: ParameterLabel::Simple(p.name.clone()),
+                        documentation: None,
+                    })
+                    .collect();
+                let param_labels: Vec<String> =
+                    func.decl.parameters.iter().map(|p| p.name.clone()).collect();
+                let signature = SignatureInformation {
+                    label: format!("{}({})", func.decl.name, param_labels.join(", ")),
+                    documentation: None,
+                    parameters: Some(sig_params),
+                    active_parameter: if func.decl.parameters.is_empty() {
+                        Some(0)
+                    } else {
+                        Some(std::cmp::min(
+                            active_param,
+                            func.decl.parameters.len() as u32 - 1,
+                        ))
+                    },
+                };
+                Some(SignatureHelp {
+                    signatures: vec![signature],
+                    active_signature: Some(0),
+                    active_parameter: Some(0),
+                })
+            })
+            .flatten();
+
+        Ok(info)
+    }
+
     async fn shutdown(&self) -> RpcResult<()> {
         tracing::info!("shutdown requested");
         Ok(())
@@ -660,4 +724,93 @@ fn encode_semantic_tokens(toks: &[skript_core::tokens::SemanticToken]) -> Vec<Se
         prev_col = t.col;
     }
     out
+}
+
+/// Given source text and cursor offset, find the enclosing function call.
+/// Returns `(function_name, active_parameter_index)` if found.
+///
+/// Walks backward from the cursor counting parens; the innermost `(` that
+/// isn't closed by a later `)` is the call's opening paren. The active
+/// parameter is the number of commas between that paren and the cursor.
+fn find_function_call_context(source: &str, offset: usize) -> Option<(String, u32)> {
+    let text = &source[..offset];
+    let mut depth = 0i32;
+    let mut call_start = None;
+
+    for (i, c) in text.char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                if depth <= 0 {
+                    call_start = Some(i);
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+
+    let call_start = call_start?;
+
+    // Extract function name: word characters before '('.
+    let before = &text[..call_start];
+    let func_name = before.rsplit(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+    if func_name.is_empty() {
+        return None;
+    }
+
+    // Count commas between '(' and cursor.
+    let args = &source[call_start + 1..offset];
+    let active_param = args.chars().filter(|c| *c == ',').count() as u32;
+
+    Some((func_name.to_owned(), active_param))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_function_call_context;
+
+    #[test]
+    fn finds_call_and_active_parameter() {
+        let src = "greet(\"hi\", name)";
+        // Cursor right after the second argument name.
+        let offset = src.find("name").unwrap() + "name".len();
+        assert_eq!(
+            find_function_call_context(src, offset),
+            Some(("greet".to_owned(), 1))
+        );
+    }
+
+    #[test]
+    fn cursor_inside_nested_call_reports_inner_function() {
+        let src = "outer(inner(x)";
+        // Cursor right after the inner argument `x`.
+        let offset = src.find('x').unwrap() + 1;
+        assert_eq!(
+            find_function_call_context(src, offset),
+            Some(("inner".to_owned(), 0))
+        );
+    }
+
+    #[test]
+    fn cursor_in_outer_args_after_closed_inner_call_reports_outer() {
+        let src = "outer(inner(x), y)";
+        // Cursor after `y`, still inside the outer call.
+        let offset = src.find('y').unwrap() + 1;
+        assert_eq!(
+            find_function_call_context(src, offset),
+            Some(("outer".to_owned(), 1))
+        );
+    }
+
+    #[test]
+    fn returns_none_outside_a_call() {
+        // No parens at all.
+        assert_eq!(find_function_call_context("on load:", 4), None);
+        // Cursor after the closing paren is not inside the call.
+        assert_eq!(find_function_call_context("foo()", "foo()".len()), None);
+        // Empty name before '(' is not a call.
+        assert_eq!(find_function_call_context("(x)", 1), None);
+    }
 }
