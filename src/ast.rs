@@ -835,6 +835,412 @@ pub fn walk_assignment_target<V: Visitor + ?Sized>(visitor: &mut V, target: &Ass
 }
 
 // ---------------------------------------------------------------------------
+// Span accessor methods
+// ---------------------------------------------------------------------------
+
+impl Expression {
+    /// Return the byte span of this expression.
+    pub fn span(&self) -> Span {
+        match self {
+            Expression::Binary(e) => e.span,
+            Expression::Unary(e) => e.span,
+            Expression::Ternary(e) => e.span,
+            Expression::PropertyAccess(e) => e.span,
+            Expression::FunctionCall(e) => e.span,
+            Expression::Index(e) => e.span,
+            Expression::Literal(lit) => match lit {
+                Literal::Number(n) => n.span,
+                Literal::String(s) => s.span,
+                Literal::Boolean(b) => b.span,
+            },
+            Expression::Variable(v) => v.span,
+            Expression::EventValue(e) => e.span,
+            Expression::List(e) => e.span,
+            Expression::Parenthesized(e) => e.span,
+            Expression::StringInterpolation(e) => e.span,
+            Expression::Unknown(e) => e.span,
+        }
+    }
+}
+
+impl Statement {
+    /// Return the byte span of this statement.
+    pub fn span(&self) -> Span {
+        match self {
+            Statement::If(s) => s.span,
+            Statement::ElseIf(s) => s.span,
+            Statement::Else(s) => s.span,
+            Statement::Loop(s) => s.span,
+            Statement::While(s) => s.span,
+            Statement::DoWhile(s) => s.span,
+            Statement::ForIn(s) => s.span,
+            Statement::Assignment(s) => s.span,
+            Statement::Effect(s) => s.span,
+            Statement::Return(s) => s.span,
+            Statement::Stop(s) => s.span,
+            Statement::Exit(s) => s.span,
+            Statement::Continue(s) => s.span,
+            Statement::CancelEvent(s) => s.span,
+            Statement::Wait(s) => s.span,
+            Statement::Expression(expr) => expr.span(),
+            Statement::Comment(c) => c.span,
+            Statement::BlankLine => Span { start: 0, end: 0 },
+        }
+    }
+}
+
+impl TopLevelItem {
+    /// Return the byte span of this top-level item.
+    pub fn span(&self) -> Span {
+        match self {
+            TopLevelItem::Function(f) => f.span,
+            TopLevelItem::Command(c) => c.span,
+            TopLevelItem::Event(e) => e.span,
+            TopLevelItem::PeriodicEvent(p) => p.span,
+            TopLevelItem::Options(o) => o.span,
+            TopLevelItem::Aliases(a) => a.span,
+            TopLevelItem::Variables(v) => v.span,
+            TopLevelItem::Using(u) => u.span,
+            TopLevelItem::Example(e) => e.span,
+            TopLevelItem::Comment(c) => c.span,
+            TopLevelItem::BlankLine => Span { start: 0, end: 0 },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NodeRef — AST node dispatch for hover resolution
+// ---------------------------------------------------------------------------
+
+/// A reference to an AST node, used for hover resolution.
+#[derive(Debug, Clone)]
+pub enum NodeRef<'a> {
+    /// A variable expression reference.
+    VariableExpr(&'a Expression),
+    /// A function call expression.
+    FunctionCall(&'a Expression),
+    /// A binary expression (operand + operator).
+    BinaryExpr(&'a Expression),
+    /// A unary expression.
+    UnaryExpr(&'a Expression),
+    /// A literal value.
+    Literal(&'a Expression),
+    /// An event value expression.
+    EventValue(&'a Expression),
+    /// A property access expression.
+    PropertyAccess(&'a Expression),
+    /// An assignment statement.
+    Assignment(&'a Statement),
+    /// A section/block statement.
+    Section(&'a Statement),
+    /// A command declaration.
+    Command(&'a TopLevelItem),
+    /// A function declaration.
+    FunctionDecl(&'a TopLevelItem),
+}
+
+// ---------------------------------------------------------------------------
+// node_at_offset — deep AST node lookup
+// ---------------------------------------------------------------------------
+
+/// Find the innermost AST node containing `offset`.
+/// Returns `None` if no node spans the offset.
+pub fn node_at_offset<'a>(program: &'a Program, offset: usize) -> Option<NodeRef<'a>> {
+    for item in &program.items {
+        let span = item.span();
+        if offset >= span.start && offset < span.end {
+            return item_node_at_offset(item, offset);
+        }
+    }
+    None
+}
+
+/// Recursively search a top-level item for the innermost node at `offset`.
+fn item_node_at_offset<'a>(item: &'a TopLevelItem, offset: usize) -> Option<NodeRef<'a>> {
+    let span = item.span();
+    if offset < span.start || offset >= span.end {
+        return None;
+    }
+
+    match item {
+        TopLevelItem::Function(fd) => {
+            for stmt in &fd.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            for param in &fd.parameters {
+                if offset >= param.span.start && offset < param.span.end {
+                    return Some(NodeRef::FunctionDecl(item));
+                }
+            }
+            Some(NodeRef::FunctionDecl(item))
+        }
+        TopLevelItem::Command(cmd) => {
+            for stmt in &cmd.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            Some(NodeRef::Command(item))
+        }
+        TopLevelItem::Event(evt) => {
+            for stmt in &evt.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        TopLevelItem::PeriodicEvent(evt) => {
+            for stmt in &evt.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        TopLevelItem::Example(example) => {
+            for stmt in &example.content {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Recursively search a statement for the innermost node at `offset`.
+fn stmt_node_at_offset<'a>(stmt: &'a Statement, offset: usize) -> Option<NodeRef<'a>> {
+    let span = stmt.span();
+    if offset < span.start || offset >= span.end {
+        return None;
+    }
+
+    match stmt {
+        Statement::If(s) => {
+            if let Some(node) = expr_node_at_offset(&s.condition, offset) {
+                return Some(node);
+            }
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            for elif in &s.else_if {
+                if let Some(node) = expr_node_at_offset(&elif.condition, offset) {
+                    return Some(node);
+                }
+                for stmt in &elif.body {
+                    if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                        return Some(node);
+                    }
+                }
+            }
+            if let Some(ref el) = s.else_branch {
+                for stmt in &el.body {
+                    if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                        return Some(node);
+                    }
+                }
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::ElseIf(s) => {
+            if let Some(node) = expr_node_at_offset(&s.condition, offset) {
+                return Some(node);
+            }
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::Else(s) => {
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::Loop(s) => {
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::While(s) => {
+            if let Some(node) = expr_node_at_offset(&s.condition, offset) {
+                return Some(node);
+            }
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::DoWhile(s) => {
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            if let Some(node) = expr_node_at_offset(&s.condition, offset) {
+                return Some(node);
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::ForIn(s) => {
+            if let Some(node) = expr_node_at_offset(&s.iterable, offset) {
+                return Some(node);
+            }
+            for stmt in &s.body {
+                if let Some(node) = stmt_node_at_offset(stmt, offset) {
+                    return Some(node);
+                }
+            }
+            Some(NodeRef::Section(stmt))
+        }
+        Statement::Assignment(s) => {
+            if let Some(node) = expr_node_at_offset(&s.value, offset) {
+                return Some(node);
+            }
+            Some(NodeRef::Assignment(stmt))
+        }
+        Statement::Effect(s) => {
+            for arg in &s.arguments {
+                if let Some(node) = expr_node_at_offset(arg, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        Statement::Return(s) => {
+            if let Some(ref val) = s.value {
+                if let Some(node) = expr_node_at_offset(val, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        Statement::Wait(s) => {
+            if let Some(ref dur) = s.duration {
+                if let Some(node) = expr_node_at_offset(dur, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        Statement::Expression(expr) => expr_node_at_offset(expr, offset),
+        // Leaf statements with no expressions
+        Statement::Stop(_) | Statement::Exit(_)
+        | Statement::Continue(_) | Statement::CancelEvent(_)
+        | Statement::BlankLine | Statement::Comment(_) => None,
+    }
+}
+
+/// Recursively search an expression for the innermost node at `offset`.
+fn expr_node_at_offset<'a>(expr: &'a Expression, offset: usize) -> Option<NodeRef<'a>> {
+    let span = expr.span();
+    if offset < span.start || offset >= span.end {
+        return None;
+    }
+
+    match expr {
+        Expression::Binary(e) => {
+            // Check children first (deeper match wins)
+            if let Some(node) = expr_node_at_offset(&e.left, offset) {
+                return Some(node);
+            }
+            if let Some(node) = expr_node_at_offset(&e.right, offset) {
+                return Some(node);
+            }
+            Some(NodeRef::BinaryExpr(expr))
+        }
+        Expression::Unary(e) => {
+            if let Some(node) = expr_node_at_offset(&e.operand, offset) {
+                return Some(node);
+            }
+            Some(NodeRef::UnaryExpr(expr))
+        }
+        Expression::Ternary(e) => {
+            if let Some(node) = expr_node_at_offset(&e.condition, offset) {
+                return Some(node);
+            }
+            if let Some(node) = expr_node_at_offset(&e.then_branch, offset) {
+                return Some(node);
+            }
+            if let Some(node) = expr_node_at_offset(&e.else_branch, offset) {
+                return Some(node);
+            }
+            None
+        }
+        Expression::PropertyAccess(e) => {
+            if let Some(node) = expr_node_at_offset(&e.object, offset) {
+                return Some(node);
+            }
+            Some(NodeRef::PropertyAccess(expr))
+        }
+        Expression::FunctionCall(e) => {
+            // Check arguments first (they contain real expressions)
+            for arg in &e.arguments {
+                if let Some(node) = expr_node_at_offset(arg, offset) {
+                    return Some(node);
+                }
+            }
+            // Don't recurse into callee — the callee Variable is semantically
+            // a function name, not a data variable reference.
+            Some(NodeRef::FunctionCall(expr))
+        }
+        Expression::Index(e) => {
+            if let Some(node) = expr_node_at_offset(&e.target, offset) {
+                return Some(node);
+            }
+            if let Some(node) = expr_node_at_offset(&e.index, offset) {
+                return Some(node);
+            }
+            None
+        }
+        Expression::List(e) => {
+            for elem in &e.elements {
+                if let Some(node) = expr_node_at_offset(elem, offset) {
+                    return Some(node);
+                }
+            }
+            None
+        }
+        Expression::Parenthesized(e) => {
+            if let Some(node) = expr_node_at_offset(&e.expression, offset) {
+                return Some(node);
+            }
+            None
+        }
+        Expression::StringInterpolation(e) => {
+            for part in &e.parts {
+                if let StrPart::Interpolation(expr) = part {
+                    if let Some(node) = expr_node_at_offset(expr, offset) {
+                        return Some(node);
+                    }
+                }
+            }
+            None
+        }
+        // Leaf expressions
+        Expression::Variable(_) => Some(NodeRef::VariableExpr(expr)),
+        Expression::Literal(_) => Some(NodeRef::Literal(expr)),
+        Expression::EventValue(_) => Some(NodeRef::EventValue(expr)),
+        Expression::Unknown(_) => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
