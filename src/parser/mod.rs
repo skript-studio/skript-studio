@@ -168,6 +168,8 @@ pub use expr::parse_expression;
 pub mod stmt;
 pub use stmt::{parse_block_body, parse_statement};
 
+pub mod incremental;
+
 #[cfg(test)]
 mod tests {
     use super::*;
