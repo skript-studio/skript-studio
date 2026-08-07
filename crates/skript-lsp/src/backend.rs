@@ -20,7 +20,9 @@ use skript_core::tokens::{self, SemanticType};
 use skript_core::validation::{self, Severity};
 use tower_lsp::jsonrpc::Result as RpcResult;
 use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionResponse, Diagnostic,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
+    CompletionResponse, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
@@ -31,7 +33,7 @@ use tower_lsp::lsp_types::{
     SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
     SemanticTokensServerCapabilities, SemanticTokenType, ServerCapabilities, SignatureHelp,
     SignatureHelpOptions, SignatureHelpParams, SignatureInformation,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
+    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -220,12 +222,13 @@ impl LanguageServer for Backend {
             folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
             definition_provider: Some(OneOf::Left(true)),
             references_provider: Some(OneOf::Left(true)),
+            code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
             signature_help_provider: Some(SignatureHelpOptions {
                 trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
                 retrigger_characters: Some(vec![",".to_owned()]),
                 ..Default::default()
             }),
-            // Explicitly NOT advertising: rename, formatting, code_action.
+            // Explicitly NOT advertising: rename, formatting.
             ..Default::default()
         };
 
@@ -594,6 +597,69 @@ impl LanguageServer for Backend {
             .flatten();
 
         Ok(info)
+    }
+
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> RpcResult<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+
+        // Turn each `unused-variable` diagnostic (see validation.rs) into a
+        // quickfix that deletes the declaration line. Replacing the line
+        // range with "" keeps the line's newline, leaving a blank line —
+        // plan-mandated behavior.
+        for diag in &params.context.diagnostics {
+            let is_unused = diag.code.as_ref().map_or(false, |c| {
+                matches!(
+                    c,
+                    tower_lsp::lsp_types::NumberOrString::String(s) if s == "unused-variable"
+                )
+            });
+            if !is_unused {
+                continue;
+            }
+            // Message format: "Unused local variable: {name}"
+            let var_name = diag
+                .message
+                .strip_prefix("Unused local variable: ")
+                .unwrap_or("");
+            if var_name.is_empty() {
+                continue;
+            }
+            let line = diag.range.start.line;
+            let line_text = text.lines().nth(line as usize).unwrap_or("");
+            let line_range = Range::new(
+                Position::new(line, 0),
+                // Byte length — ASCII approximation, consistent with the
+                // reverse path in `char_index_for_column`.
+                Position::new(line, line_text.len() as u32),
+            );
+
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Remove unused variable {var_name}"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(std::collections::HashMap::from([(
+                        params.text_document.uri.clone(),
+                        vec![TextEdit {
+                            range: line_range,
+                            new_text: String::new(),
+                        }],
+                    )])),
+                    ..Default::default()
+                }),
+                diagnostics: Some(vec![diag.clone()]),
+                ..Default::default()
+            }));
+        }
+
+        Ok(Some(actions))
     }
 
     async fn shutdown(&self) -> RpcResult<()> {
