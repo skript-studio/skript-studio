@@ -12,10 +12,44 @@
 use crate::options::EffectiveConfig;
 use include_dir::{include_dir, Dir};
 use skript_core::matching::{EntryTable, SyntaxIndex};
+use skript_core::parser::incremental::{incremental_update, split_sections, Section};
+use skript_core::parser::ParseResult;
+use skript_core::semantic::{analyze, SemanticAnalysis};
+use skript_core::parse_program;
 use skript_core::SyntaxEntry;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
+
+/// The cached result of parsing and analyzing a document.
+pub struct DocumentSnapshot {
+    pub parse_result: ParseResult,
+    pub analysis: SemanticAnalysis,
+    pub sections: Vec<Section>,
+}
+
+impl DocumentSnapshot {
+    /// Create a fresh snapshot by parsing + analyzing the source.
+    pub fn new(source: &str) -> Self {
+        let parse_result = parse_program(source);
+        let sections = split_sections(source);
+        let analysis = analyze(&parse_result.program);
+        DocumentSnapshot { parse_result, analysis, sections }
+    }
+
+    /// Incrementally update from a previous snapshot.
+    pub fn update(old_source: &str, new_source: &str, old: &DocumentSnapshot) -> Self {
+        let parse_result = incremental_update(old_source, new_source, &old.parse_result.program);
+        let sections = split_sections(new_source);
+        let analysis = analyze(&parse_result.program);
+        DocumentSnapshot { parse_result, analysis, sections }
+    }
+}
+
+struct DocEntry {
+    text: String,
+    snapshot: Option<DocumentSnapshot>,
+}
 
 /// Shared server state, cloned cheaply into every request handler.
 #[derive(Clone)]
@@ -30,7 +64,7 @@ struct Inner {
     /// `true` once the embedded cache has populated `index`/`table`.
     ready: AtomicBool,
     /// Open documents keyed by URI string.
-    docs: dashmap::DashMap<String, String>,
+    docs: dashmap::DashMap<String, DocEntry>,
     config: RwLock<EffectiveConfig>,
     /// Serializes refresh attempts.
     refresh_lock: Mutex<()>,
@@ -87,11 +121,31 @@ impl AppState {
     // --- documents ---------------------------------------------------------
 
     pub fn open_doc(&self, uri: String, text: String) {
-        self.inner.docs.insert(uri, text);
+        let snapshot = DocumentSnapshot::new(&text);
+        self.inner.docs.insert(uri, DocEntry {
+            text,
+            snapshot: Some(snapshot),
+        });
     }
 
-    pub fn update_doc(&self, uri: &str, text: String) {
-        self.inner.docs.insert(uri.to_owned(), text);
+    pub fn update_doc(&self, uri: &str, new_text: String) {
+        if let Some(mut entry) = self.inner.docs.get_mut(uri) {
+            let old_text = std::mem::replace(&mut entry.text, new_text);
+            if old_text != entry.text {
+                let old_snapshot = entry.snapshot.take();
+                let new_snapshot = match old_snapshot {
+                    Some(old) => DocumentSnapshot::update(&old_text, &entry.text, &old),
+                    None => DocumentSnapshot::new(&entry.text),
+                };
+                entry.snapshot = Some(new_snapshot);
+            }
+        } else {
+            let snapshot = DocumentSnapshot::new(&new_text);
+            self.inner.docs.insert(uri.to_owned(), DocEntry {
+                text: new_text,
+                snapshot: Some(snapshot),
+            });
+        }
     }
 
     pub fn close_doc(&self, uri: &str) {
@@ -99,7 +153,14 @@ impl AppState {
     }
 
     pub fn get_doc(&self, uri: &str) -> Option<String> {
-        self.inner.docs.get(uri).map(|s| s.clone())
+        self.inner.docs.get(uri).map(|entry| entry.text.clone())
+    }
+
+    /// Access the cached snapshot for a document.
+    pub fn with_snapshot<R>(&self, uri: &str, f: impl FnOnce(&DocumentSnapshot) -> R) -> Option<R> {
+        self.inner.docs.get(uri).and_then(|entry| {
+            entry.snapshot.as_ref().map(|snap| f(snap))
+        })
     }
 
     /// URIs of all currently open documents. Useful for re-publishing
