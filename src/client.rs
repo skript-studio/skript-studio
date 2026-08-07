@@ -1,8 +1,8 @@
 //! SkriptHub API client.
 //!
 //! Fetches the addon syntax list and normalizes it into [`SyntaxEntry`].
-//! The only non-trivial transformation is expanding the stringified-JSON
-//! `entries` field on section elements into a real `Vec<SectionEntry>`.
+//! The only non-trivial transformation is parsing the JSON-array `entries`
+//! field on section elements into a real `Vec<SectionEntry>`.
 
 use crate::syntax::{SectionEntry, SyntaxEntry};
 use serde::Deserialize;
@@ -26,15 +26,16 @@ pub enum FetchError {
 
 /// Raw shape of an entry as returned by SkriptHub, before normalization.
 ///
-/// `entries` arrives as a *string* containing JSON, so we read it as a
-/// `String` here and parse it explicitly in [`normalize`].
+/// `entries` arrives as a JSON array (or null/missing), so we read it as an
+/// untyped [`serde_json::Value`] here and parse it in [`normalize`].
 #[derive(Debug, Deserialize)]
 struct RawEntry {
     #[serde(flatten)]
     entry: SyntaxEntry,
-    /// Stringified JSON array (sections) or null/empty otherwise.
+    /// JSON array of sub-entries for section elements, or null/missing
+    /// otherwise.
     #[serde(default)]
-    entries: Option<String>,
+    entries: Option<serde_json::Value>,
 }
 
 /// Fetch the full syntax list from `url` and normalize each entry.
@@ -60,23 +61,15 @@ pub async fn fetch_syntax_list(url: &str) -> Result<Vec<SyntaxEntry>, FetchError
     Ok(raw.into_iter().map(normalize).collect())
 }
 
-/// Expand the stringified `entries` JSON on section entries; pass everything
-/// else through unchanged.
+/// Parse the `entries` JSON array on section entries; pass everything else
+/// through unchanged. Malformed values become `None` (treated as "no
+/// entries") rather than dropping the whole syntax element.
 fn normalize(raw: RawEntry) -> SyntaxEntry {
     let mut entry = raw.entry;
-    entry.entries = raw.entries.as_deref().and_then(parse_section_entries);
+    entry.entries = raw
+        .entries
+        .and_then(|v| serde_json::from_value::<Vec<SectionEntry>>(v).ok());
     entry
-}
-
-/// Parse a stringified JSON array of section sub-entries. Returns `None` on
-/// any parse failure (we treat malformed `entries` as "no entries" rather than
-/// dropping the whole syntax element).
-fn parse_section_entries(raw: &str) -> Option<Vec<SectionEntry>> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    serde_json::from_str::<Vec<SectionEntry>>(trimmed).ok()
 }
 
 #[cfg(test)]
@@ -86,7 +79,7 @@ mod tests {
 
     #[test]
     fn normalize_parses_stringified_entries_for_sections() {
-        let raw_json = r#"entries=[{"name":"id","isRequired":true,"isSection":false},{"name":"sub","isRequired":false,"isSection":true}]"#;
+        let raw_json = r#""entries":[{"name":"id","isRequired":true,"isSection":false},{"name":"sub","isRequired":false,"isSection":true}]"#;
         // Build a raw JSON document that mirrors what SkriptHub sends.
         let document = format!(
             r#"[{{

@@ -56,6 +56,14 @@ pub struct CompiledPattern {
     /// Compiled regex with an end-of-string anchor for full-line matching
     /// (validation diagnostics).
     pub full_regex: Regex,
+    /// The parsed token sequence the pattern was compiled from. Used by
+    /// [`CompiledPattern::matches_prefix`] to reason about prefix boundaries.
+    pub tokens: Vec<PatternToken>,
+    /// One regex per prefix length `k` (1-based), compiled from
+    /// `tokens[0..k]`. When the k-th token is a type placeholder it emits
+    /// `(.*)` (empty allowed, greedy to the end of input) so a bare keyword
+    /// prefix still matches.
+    pub prefix_regexes: Vec<Regex>,
     /// `(type_name, capture_index)` pairs, one per `%type%` in source order.
     /// Capture indices are 1-based and align with the regex's groups.
     pub type_groups: Vec<(String, usize)>,
@@ -65,6 +73,48 @@ pub struct CompiledPattern {
     /// diagnostics, but remain usable for hover/completion.
     pub is_bare_type: bool,
     pub original: String,
+}
+
+impl CompiledPattern {
+    /// Whether `text` is a valid prefix of this pattern: either the full
+    /// pattern regex matches from the start, or some prefix of the token
+    /// sequence fully consumes `text` (input must be entirely accounted for,
+    /// not merely started). When the prefix ends on a type placeholder, the
+    /// captured value must not contain any literal word of the pattern — a
+    /// type value must not swallow a keyword like the `to` in
+    /// `set aXb to c` for `set %object%.%slot% to %object%`.
+    pub fn matches_prefix(&self, text: &str) -> bool {
+        // Fast path: the pattern's own (unanchored) regex already matching
+        // from byte 0 means a valid full prefix, e.g. `set a.b to c`.
+        match self.regex.find(text) {
+            Some(m) if m.start() == 0 => return true,
+            _ => {}
+        }
+
+        let words = literal_words(&self.tokens);
+        for k in (1..=self.tokens.len()).rev() {
+            let Some(caps) = self.prefix_regexes[k - 1].captures(text) else {
+                continue;
+            };
+            let whole = match caps.get(0) {
+                Some(m) => m,
+                None => continue,
+            };
+            // The whole input must be consumed by this prefix.
+            if whole.start() != 0 || whole.end() != text.len() {
+                continue;
+            }
+            if matches!(&self.tokens[k - 1], PatternToken::TypePlaceholder(_)) {
+                let group = type_placeholder_count(&self.tokens[..k]);
+                let captured = caps.get(group).map(|m| m.as_str()).unwrap_or("");
+                if words.iter().any(|word| captured.to_lowercase().contains(word)) {
+                    continue;
+                }
+            }
+            return true;
+        }
+        false
+    }
 }
 
 /// Parse a single Skript pattern variant into tokens.
@@ -235,17 +285,13 @@ impl Parser {
     /// A `[...]` is a *char class* only if every member between the brackets
     /// is a single character (no spaces, no nested constructs).
     fn is_char_class(&self) -> bool {
-        let mut depth = 0i32;
         let mut count = 0usize;
         let mut i = self.pos + 1;
         while i < self.chars.len() {
             match self.chars[i] {
-                ']' if depth == 0 => return count > 0,
-                '[' => {
-                    depth += 1;
-                    return false;
-                }
-                ']' => depth -= 1,
+                ']' => return count > 0,
+                // Nested `[` is never a char class.
+                '[' => return false,
                 '(' | '%' | ' ' | '|' => return false,
                 c if c.is_alphanumeric() => count += 1,
                 _ => return false,
@@ -287,6 +333,25 @@ pub fn compile_pattern(parsed: &ParsedPattern) -> Result<CompiledPattern, regex:
     full_builder.case_insensitive(true);
     let full_regex = full_builder.build()?;
 
+    // One prefix regex per prefix length. The k-th token emits `(.*)`
+    // instead of `(.+?)` when it is a type placeholder: the `*` allows an
+    // empty value (e.g. bare `send` for `send %text% to %player%`), and the
+    // greedy quantifier extends to the end of the input so the caller's
+    // full-consumption check (`m.end() == text.len()`) is meaningful — a
+    // lazy `(.*?)` would stop at the shortest prefix instead.
+    let mut prefix_regexes = Vec::with_capacity(parsed.tokens.len());
+    for k in 1..=parsed.tokens.len() {
+        let mut prefix_pattern = String::new();
+        emit_tokens(&parsed.tokens[..k - 1], &mut prefix_pattern);
+        match &parsed.tokens[k - 1] {
+            PatternToken::TypePlaceholder(_) => prefix_pattern.push_str("(.*)"),
+            last => emit_token(last, &mut prefix_pattern),
+        }
+        let mut prefix_builder = RegexBuilder::new(&prefix_pattern);
+        prefix_builder.case_insensitive(true);
+        prefix_regexes.push(prefix_builder.build()?);
+    }
+
     let is_bare_type = parsed.tokens.iter().all(|t| {
         matches!(t, PatternToken::TypePlaceholder(_))
     });
@@ -294,6 +359,8 @@ pub fn compile_pattern(parsed: &ParsedPattern) -> Result<CompiledPattern, regex:
     Ok(CompiledPattern {
         regex,
         full_regex,
+        tokens: parsed.tokens.clone(),
+        prefix_regexes,
         type_groups: type_groups_for(&parsed.tokens),
         is_bare_type,
         original: parsed.original.clone(),
@@ -415,6 +482,50 @@ fn collect_type_groups(
     }
 }
 
+/// The lowercased literal words of a pattern (each `Literal` split on
+/// whitespace). Used to reject type captures that would swallow a keyword.
+fn literal_words(tokens: &[PatternToken]) -> Vec<String> {
+    let mut words = Vec::new();
+    collect_literal_words(tokens, &mut words);
+    words
+}
+
+fn collect_literal_words(tokens: &[PatternToken], out: &mut Vec<String>) {
+    for token in tokens {
+        match token {
+            PatternToken::Literal(s) => {
+                out.extend(s.split_whitespace().map(|w| w.to_lowercase()));
+            }
+            PatternToken::Optional(inner) => collect_literal_words(inner, out),
+            PatternToken::Alternation(arms) => {
+                for arm in arms {
+                    collect_literal_words(arm, out);
+                }
+            }
+            PatternToken::TypePlaceholder(_) | PatternToken::CharClass(_) => {}
+        }
+    }
+}
+
+/// Number of type placeholders in the token slice, mirroring the capture
+/// group numbering used by `type_groups_for`.
+fn type_placeholder_count(tokens: &[PatternToken]) -> usize {
+    let mut count = 0usize;
+    for token in tokens {
+        match token {
+            PatternToken::TypePlaceholder(_) => count += 1,
+            PatternToken::Optional(inner) => count += type_placeholder_count(inner),
+            PatternToken::Alternation(arms) => {
+                for arm in arms {
+                    count += type_placeholder_count(arm);
+                }
+            }
+            PatternToken::Literal(_) | PatternToken::CharClass(_) => {}
+        }
+    }
+    count
+}
+
 /// Non-greedy "anything" used for type placeholders. `[^,)]+?` would be more
 /// precise but breaks multi-token values like `1, 2 and 3`; we keep `.+?` and
 /// rely on the surrounding literal anchors.
@@ -430,11 +541,7 @@ mod tests {
     }
 
     fn matches_at_start(cp: &CompiledPattern, text: &str) -> bool {
-        // Find a match anywhere then confirm it's anchored at byte 0.
-        match cp.regex.find(text) {
-            Some(m) => m.start() == 0,
-            None => false,
-        }
+        cp.matches_prefix(text)
     }
 
     #[test]
@@ -502,5 +609,20 @@ mod tests {
         let cp = compile("send %text% to %player%");
         assert!(matches_at_start(&cp, "send"));
         assert!(matches_at_start(&cp, "send \"hi\""));
+    }
+
+    #[test]
+    fn prefix_matches_fully_consume_input() {
+        // A prefix match must account for the entire input: trailing literals
+        // are consumed, a trailing type value may be empty, and a type value
+        // may not swallow a literal word of the pattern.
+        let cp = compile("set %object%.%slot% to %object%");
+        assert!(matches_at_start(&cp, "set a.b to"));
+        assert!(matches_at_start(&cp, "set a.b"));
+        assert!(!matches_at_start(&cp, "set aXb to c"));
+
+        let send = compile("send %text% to %player%");
+        assert!(matches_at_start(&send, "send \"hi\" to"));
+        assert!(!matches_at_start(&send, "give sword to player"));
     }
 }

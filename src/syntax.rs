@@ -8,15 +8,17 @@
 //! See `docs/superpowers/specs/2026-06-19-skript-lsp-design.md` for the field
 //! reference. The notable quirks handled here:
 //!   * `syntax_pattern` may contain multiple variants separated by `\r\n`.
-//!   * `entries` (for sections) is a *stringified* JSON array, not a real one.
+//!   * `entries` (for sections) is a JSON array that the client parses into
+//!     a `Vec<SectionEntry>`.
 //!   * Many fields are `null` *or* empty depending on `syntax_type`.
 
 use serde::{Deserialize, Serialize};
 
 /// The kind of a syntax element. Matches the string values produced by
 /// SkriptHub (`"event"`, `"effect"`, `"condition"`, `"expression"`,
-/// `"section"`, `"function"`, `"structure"`, `"type"`, plus any unknown
-/// values are mapped via `serde(untagged)` fallback to `Other`).
+/// `"section"`, `"function"`, `"structure"`, `"type"`); any unknown value
+/// (e.g. `"supereffect"`) is mapped via `#[serde(other)]` to
+/// [`SyntaxType::Other`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyntaxType {
@@ -29,6 +31,7 @@ pub enum SyntaxType {
     Structure,
     Type,
     /// Catch-all for unknown / future values. Keeps deserialization total.
+    #[serde(other)]
     Other,
 }
 
@@ -71,8 +74,10 @@ pub struct Plugin {
 }
 
 /// A sub-entry declared by a `section` syntax element. `entries` in the raw
-/// JSON is a *stringified* JSON array; the API client parses it into this.
+/// JSON is a JSON array; the API client parses it into this. Keys arrive
+/// camelCased (`isRequired`, `isSection`) from SkriptHub.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SectionEntry {
     #[serde(default)]
     pub name: String,
@@ -108,7 +113,7 @@ pub struct SyntaxEntry {
     pub event_values: Option<String>,
     #[serde(default)]
     pub type_usage: Option<String>,
-    /// Parsed from the stringified JSON `entries` field by the client.
+    /// Parsed from the JSON-array `entries` field by the client.
     /// `None` for non-section entries or when the field is missing/invalid.
     #[serde(default)]
     pub entries: Option<Vec<SectionEntry>>,

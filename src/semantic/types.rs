@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::semantic::functions::FunctionRegistry;
 use crate::semantic::scope::ScopeTree;
-use crate::semantic::scope::Symbol;
-use crate::semantic::scope::SymbolKind;
 
 /// A resolved type for an expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -424,6 +422,7 @@ fn expr_span_start(expr: &Expression) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic::scope::{Symbol, SymbolKind};
     
 
     fn num_literal(value: &str, start: usize) -> Expression {
