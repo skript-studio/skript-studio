@@ -40,7 +40,7 @@ bun run package                          # vsce package → skript-studio-vscode
 bun run install                          # code --install-extension skript-studio-vscode.vsix
 bun run dev:install                      # all of the above: build → package → install
 bun run prepublish                       # build:binary → compile → package (no install)
-bun run download-cache                   # fetch SkriptHub data → ../../crates/skript-lsp/data/skripthub-cache.json
+bun run download-cache                   # fetch SkriptHub data → ../../crates/skript-lsp/data/skripthub/
 ```
 
 `extension.ts` starts the LSP with `--stdio --log-level`. No network calls at startup — cache embedded via `include_bytes!(`) in `state.rs`.
@@ -52,7 +52,6 @@ bun run download-cache                   # fetch SkriptHub data → ../../crates
 
 ## Key constraints
 
-- `skripthub-cache.json` is gitignored (regenerable via `download-cache`). `cargo build` fails if missing — run that script first.
-- The extension's `data/skripthub-cache.json` was never used; the correct path is `crates/skript-lsp/data/`.
+- `crates/skript-lsp/data/skripthub/` (per-addon cache files split by `extensions/vscode-skript/normalize-cache.mjs`) is gitignored and regenerable via `bun run download-cache`. `cargo build` fails if the directory is missing (embedded via `include_dir!`) — run that script first.
 - `nul` in `.gitignore` works around a Windows reserved-name phantom entry that appears in every directory listing.
 - LSP listens on `--port <n>` (WebSocket) or `--stdio`. The VSCode extension uses `--stdio`.

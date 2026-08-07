@@ -277,4 +277,37 @@ mod tests {
         state.close_doc("file:///x.sk");
         assert!(state.get_doc("file:///x.sk").is_none());
     }
+
+    // --- addon filtering (first plan Task 6) ---
+
+    const TEST_CACHE: Dir = include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/skripthub");
+
+    fn loaded_addons(extra: &[String]) -> std::collections::HashSet<String> {
+        load_addon_files(&TEST_CACHE, extra)
+            .into_iter()
+            .map(|e| e.addon.name)
+            .collect()
+    }
+
+    #[test]
+    fn load_only_skript_when_extra_empty() {
+        let addons = loaded_addons(&[]);
+        assert_eq!(addons.len(), 1, "should only contain Skript entries");
+        assert!(addons.contains("Skript"));
+    }
+
+    #[test]
+    fn load_skript_plus_requested_addons() {
+        let addons = loaded_addons(&["SkBee".to_owned()]);
+        assert!(addons.contains("Skript"));
+        assert!(addons.contains("SkBee"));
+        assert!(!addons.contains("SkQuery"), "unrequested addon must be filtered out");
+    }
+
+    #[test]
+    fn load_all_when_skript_is_explicit() {
+        let entries = load_addon_files(&TEST_CACHE, &["Skript".to_owned()]);
+        assert!(!entries.is_empty(), "should have at least Skript entries");
+        assert!(entries.iter().all(|e| e.addon.name == "Skript"));
+    }
 }

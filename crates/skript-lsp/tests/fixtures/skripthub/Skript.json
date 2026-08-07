@@ -1,0 +1,1 @@
+[{"id":1,"title":"Send","syntax_pattern":"send %text% to %player%","syntax_type":"effect","addon":{"name":"Skript"}}]
