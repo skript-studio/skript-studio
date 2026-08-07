@@ -21,11 +21,11 @@ Clone with `--recurse-submodules` (or run `git submodule update --init --recursi
 
 ```bash
 cargo build -p skript-lsp                # dev profile
-cargo test -p skript-core                 # core lib tests (45 pass, 5 pre-existing pattern/syntax failures)
+cargo test -p skript-core                 # core lib tests (345 pass, 0 failures)
 cargo test -p skript-lsp --test smoke -- --ignored --nocapture  # integration: needs server on ws://127.0.0.1:9876
 ```
 
-3 pre-existing test failures in `skript-core` — `partial_prefix_matches`, `normalize_parses_stringified_entries_for_sections`, `deserializes_unknown_syntax_type_to_other`. The `escape_debug()` regex escaping bug was fixed in commit `2ddee04`.
+All `skript-core` tests pass. Historical: the `escape_debug()` regex escaping bug was fixed in commit `2ddee04`; the previously-failing `partial_prefix_matches`, `normalize_parses_stringified_entries_for_sections`, and `deserializes_unknown_syntax_type_to_other` were fixed in submodule commit `35737b0`.
 
 ## Extension (VSCode)
 
