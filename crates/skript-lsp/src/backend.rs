@@ -7,7 +7,7 @@
 //!
 //! LSP version: 3.17. We advertise only the capabilities we actually
 //! implement (completion, hover, diagnostics push, semanticTokens/full,
-//! document symbols, folding, go-to-definition).
+//! document symbols, folding, go-to-definition, references).
 
 use crate::folding;
 use crate::options::{InitOptions, SkriptRcToml};
@@ -26,7 +26,7 @@ use tower_lsp::lsp_types::{
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
     InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
-    MarkupContent, MarkupKind, OneOf, Position, Range, SemanticToken, SemanticTokens,
+    MarkupContent, MarkupKind, OneOf, Position, Range, ReferenceParams, SemanticToken, SemanticTokens,
     SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
     SemanticTokensResult, SemanticTokensServerCapabilities, SemanticTokenType,
     ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
@@ -217,8 +217,9 @@ impl LanguageServer for Backend {
             document_symbol_provider: Some(OneOf::Left(true)),
             folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
             definition_provider: Some(OneOf::Left(true)),
-            // Explicitly NOT advertising: references, rename, formatting,
-            // code_action, signature_help.
+            references_provider: Some(OneOf::Left(true)),
+            // Explicitly NOT advertising: rename, formatting, code_action,
+            // signature_help.
             ..Default::default()
         };
 
@@ -490,6 +491,45 @@ impl LanguageServer for Backend {
             .flatten();
 
         Ok(location.map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(
+        &self,
+        params: ReferenceParams,
+    ) -> RpcResult<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let pos = params.text_document_position.position;
+
+        // Resolve the symbol at the cursor via the cached snapshot, then walk
+        // the program for every occurrence of its name. The returned spans
+        // include the declaration occurrence itself. Falls back to `None` (no
+        // references) when the position isn't a resolvable reference.
+        let locations = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let symbol = references::find_symbol_at_offset(
+                    &snap.parse_result.program,
+                    &snap.analysis,
+                    offset,
+                )?;
+                let spans = references::find_references(&snap.parse_result.program, &symbol);
+                Some(
+                    spans
+                        .iter()
+                        .map(|span| Location {
+                            uri: params.text_document_position.text_document.uri.clone(),
+                            range: span_to_range(&text, *span),
+                        })
+                        .collect(),
+                )
+            })
+            .flatten();
+
+        Ok(locations)
     }
 
     async fn shutdown(&self) -> RpcResult<()> {
