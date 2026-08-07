@@ -1,13 +1,11 @@
-//! Skript lexer for semantic tokens.
+//! Skript semantic tokenizer.
 //!
 //! Produces a flat list of typed spans (keyword, type, variable, string,
 //! comment, operator, ...) suitable for LSP `textDocument/semanticTokens`.
 //!
-//! The design is deliberately line-based and regex-driven: Skript has no
-//! context-free grammar we can reuse here, and VS Code's semantic-token
-//! protocol is tolerant of overlapping/imperfect tokenization. The goal is
-//! "good enough highlighting" on top of the TextMate grammar, not a precise
-//! parse.
+//! Uses the AST lexer (3-mode: Normal / InString / InStringInterpolation)
+//! instead of the old line-by-line regex approach, so string interpolation,
+//! nested braces, and MiniMessage tags are handled correctly.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -54,274 +52,217 @@ pub struct SemanticToken {
 
 /// Tokenize a whole document into semantic tokens. Line/column are 0-based.
 pub fn tokenize(text: &str) -> Vec<SemanticToken> {
-    let mut out = Vec::new();
-    for (i, line) in text.split('\n').enumerate() {
-        tokenize_line(line, i as u32, &mut out);
-    }
-    out
-}
+    use crate::lexer::{Lexer, Token};
 
-fn tokenize_line(line: &str, line_idx: u32, out: &mut Vec<SemanticToken>) {
-    // Comments consume the whole rest of the line.
-    if let Some(pos) = line.find('#') {
-        // Only treat `#` as a comment if it's not inside a string. We do a
-        // cheap check: count unescaped quotes before it.
-        if !is_inside_string(&line[..pos]) {
-            out.push(SemanticToken {
-                line: line_idx,
-                col: pos as u32,
-                length: (line.len() - pos) as u32,
-                ty: SemanticType::Comment,
-            });
-            return;
-        }
-    }
-
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    let mut prev_word: Option<&str> = None;
-
-    while i < bytes.len() {
-        let rest = &line[i..];
-
-        // Whitespace.
-        if bytes[i].is_ascii_whitespace() {
-            i += 1;
-            continue;
-        }
-
-        // Double-quoted string.
-        if rest.starts_with('"') {
-            let len = match_string(rest, '"');
-            push(out, line_idx, i, len, SemanticType::String);
-            i += len;
-            prev_word = None;
-            continue;
-        }
-        // Single-quoted string (`''like this''`).
-        if rest.starts_with("''") {
-            let len = match_two_char_string(rest);
-            push(out, line_idx, i, len, SemanticType::String);
-            i += len;
-            prev_word = None;
-            continue;
-        }
-
-        // Variable `{...}` (nested allowed).
-        if rest.starts_with('{') {
-            let len = match_braced(rest);
-            if len > 0 {
-                push(out, line_idx, i, len, SemanticType::Variable);
-                i += len;
-                prev_word = None;
-                continue;
+    // ---- build line-start byte-offset table ---------------------------------
+    let line_starts: Vec<usize> = {
+        let mut starts = vec![0usize];
+        for (i, c) in text.char_indices() {
+            if c == '\n' {
+                starts.push(i + 1);
             }
         }
+        starts
+    };
 
-        // Number.
-        if let Some(len) = match_number(rest) {
-            push(out, line_idx, i, len, SemanticType::Number);
-            i += len;
-            prev_word = None;
-            continue;
+    // ---- 1. comment pre-pass ------------------------------------------------
+    // The lexer skips `#` entirely, so we detect comments ourselves.
+    let mut comment_positions: Vec<(usize, usize)> = Vec::new();
+    for (line_idx, line) in text.split('\n').enumerate() {
+        if line_idx >= line_starts.len() {
+            break;
         }
-
-        // Operators.
-        if let Some(len) = match_operator(rest) {
-            push(out, line_idx, i, len, SemanticType::Operator);
-            i += len;
-            prev_word = None;
-            continue;
-        }
-
-        // Word.
-        if let Some(word) = match_word(rest) {
-            let len = word.len();
-            let ty = classify_word(word, prev_word);
-            push(out, line_idx, i, len, ty);
-            i += len;
-            prev_word = Some(word);
-            continue;
-        }
-
-        // Anything else: advance by one char to avoid an infinite loop.
-        let len = next_char_len(rest);
-        i += len;
-        prev_word = None;
-    }
-}
-
-fn push(out: &mut Vec<SemanticToken>, line: u32, col: usize, len: usize, ty: SemanticType) {
-    if len == 0 {
-        return;
-    }
-    out.push(SemanticToken {
-        line,
-        col: col as u32,
-        length: len as u32,
-        ty,
-    });
-}
-
-fn match_string(rest: &str, quote: char) -> usize {
-    let mut chars = rest.char_indices();
-    let _ = chars.next(); // consume opening quote
-    for (i, c) in chars {
-        if c == quote {
-            return i + c.len_utf8();
-        }
-    }
-    rest.len()
-}
-
-fn match_two_char_string(rest: &str) -> usize {
-    // `''text''`: find the closing `''`.
-    if let Some(end) = rest[2..].find("''") {
-        end + 4
-    } else {
-        rest.len()
-    }
-}
-
-fn match_braced(rest: &str) -> usize {
-    let mut depth = 0i32;
-    let bytes = rest.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return i + 1;
-                }
+        let trimmed = line.trim_start();
+        if let Some(comment_start) = trimmed.find('#') {
+            if !is_inside_string(&trimmed[..comment_start]) {
+                let trim_offset = line.len() - trimmed.len();
+                let col = trim_offset + comment_start;
+                let offset = line_starts[line_idx] + col;
+                let len = line.len() - col;
+                comment_positions.push((offset, len));
             }
+        }
+    }
+
+    // ---- 2. lexer pass ------------------------------------------------------
+    let mut lexer = Lexer::new(text);
+    // Per-line vector of (byte_offset, length, type)
+    let mut tokens_by_line: Vec<Vec<(usize, usize, SemanticType)>> =
+        vec![Vec::new(); line_starts.len()];
+    let mut prev_word: Option<String> = None;
+
+    loop {
+        let spanned = lexer.next_token();
+        let start = spanned.span.start;
+        let len = spanned.span.end - start;
+
+        match spanned.token {
+            Token::Eof => break,
+
+            // Structural tokens – not interesting for highlighting.
+            Token::Indent | Token::Dedent | Token::Newline => continue,
+
+            // Delimiters.
+            Token::LParen | Token::RParen | Token::LBrace | Token::RBrace
+            | Token::LBracket | Token::RBracket => continue,
+
+            // String content (simple + interpolation fragments + MiniMessage).
+            Token::String(_) | Token::StrText(_)
+            | Token::MiniMessageOpen(_) | Token::MiniMessageClose(_) => {
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, SemanticType::String));
+            }
+            Token::StrInterpolationStart | Token::StrInterpolationEnd => {
+                // Just markers – skip.
+            }
+
+            // Variables.
+            Token::Variable(_) | Token::EventValue(_) => {
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, SemanticType::Variable));
+            }
+
+            // Numbers.
+            Token::Number(_) => {
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, SemanticType::Number));
+            }
+
+            // Booleans → highlighted as keywords (matches old behaviour).
+            Token::Boolean(_) => {
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, SemanticType::Keyword));
+            }
+
+            // Keywords.
+            Token::Keyword(ref word) => {
+                let lower = word.to_ascii_lowercase();
+                let ty = if is_operator_word(&lower) {
+                    SemanticType::Operator
+                } else if prev_word.as_deref() == Some("on") {
+                    SemanticType::Event
+                } else if prev_word.as_deref() == Some("function") {
+                    SemanticType::Function
+                } else {
+                    SemanticType::Keyword
+                };
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, ty));
+                prev_word = Some(word.to_string());
+            }
+
+            // Identifiers (need context-sensitive classification).
+            Token::Identifier(ref word) => {
+                let lower = word.to_ascii_lowercase();
+                let ty = if prev_word.as_deref() == Some("on") {
+                    SemanticType::Event
+                } else if prev_word.as_deref() == Some("function") {
+                    SemanticType::Function
+                } else if is_type(&lower) {
+                    SemanticType::Type
+                } else if is_operator_word(&lower) {
+                    SemanticType::Operator
+                } else {
+                    SemanticType::Keyword
+                };
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, ty));
+                prev_word = Some(word.clone());
+            }
+
+            // Operators.
+            Token::Plus | Token::Minus | Token::Star | Token::Slash
+            | Token::Percent | Token::Caret | Token::Tilde
+            | Token::EqualEqual | Token::NotEqual | Token::LessEqual
+            | Token::GreaterEqual | Token::Less | Token::Greater
+            | Token::Equal | Token::ColonEqual | Token::PlusEqual
+            | Token::MinusEqual | Token::StarEqual | Token::SlashEqual
+            | Token::Dot | Token::Arrow | Token::Pipe => {
+                let li = line_index_for_offset(&line_starts, start);
+                tokens_by_line[li].push((start, len, SemanticType::Operator));
+            }
+
+            // Everything else (Colon, Comma, Semicolon, …) – skip.
             _ => {}
         }
     }
-    0
-}
 
-fn match_number(rest: &str) -> Option<usize> {
-    let bytes = rest.as_bytes();
-    if !bytes.first().map(|b| b.is_ascii_digit() || *b == b'-' || *b == b'+').unwrap_or(false) {
-        return None;
+    // ---- 3. merge comment positions into line data --------------------------
+    for &(offset, len) in &comment_positions {
+        let li = line_index_for_offset(&line_starts, offset);
+        tokens_by_line[li].push((offset, len, SemanticType::Comment));
     }
-    let mut i = 0;
-    if bytes[i] == b'-' || bytes[i] == b'+' {
-        i += 1;
-    }
-    let mut saw_digit = false;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        saw_digit = true;
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b'.' {
-        i += 1;
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
+
+    // ---- 4. produce output --------------------------------------------------
+    let mut result = Vec::new();
+    for (line_idx, line_tokens) in tokens_by_line.iter().enumerate() {
+        if line_tokens.is_empty() {
+            continue;
+        }
+        let mut sorted = line_tokens.clone();
+        sorted.sort_by_key(|&(offset, _, _)| offset);
+        let merged = merge_adjacent_same_type(&sorted);
+        for &(offset, length, ty) in &merged {
+            let col = offset - line_starts[line_idx];
+            result.push(SemanticToken {
+                line: line_idx as u32,
+                col: col as u32,
+                length: length as u32,
+                ty,
+            });
         }
     }
-    if saw_digit {
-        Some(i)
-    } else {
-        None
-    }
+
+    result
 }
 
-fn match_operator(rest: &str) -> Option<usize> {
-    // Multi-char operators first.
-    for op in [">=", "<=", "!=", "=="] {
-        if rest.starts_with(op) {
-            return Some(op.len());
-        }
-    }
-    if matches!(rest.chars().next(), Some('=' | '>' | '<')) {
-        Some(1)
-    } else {
-        None
-    }
+// ---- helpers ----------------------------------------------------------------
+
+fn line_index_for_offset(line_starts: &[usize], offset: usize) -> usize {
+    line_starts
+        .binary_search_by(|&start| start.cmp(&offset))
+        .unwrap_or_else(|i| i.saturating_sub(1))
+        .min(line_starts.len() - 1)
 }
 
-fn match_word(rest: &str) -> Option<&str> {
-    let bytes = rest.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'\'' {
-            i += 1;
+fn merge_adjacent_same_type(
+    tokens: &[(usize, usize, SemanticType)],
+) -> Vec<(usize, usize, SemanticType)> {
+    if tokens.is_empty() {
+        return vec![];
+    }
+    let mut merged = Vec::new();
+    let mut cur = tokens[0];
+    for &next in &tokens[1..] {
+        if next.0 == cur.0 + cur.1 && next.2 == cur.2 {
+            cur.1 += next.1;
         } else {
-            break;
+            merged.push(cur);
+            cur = next;
         }
     }
-    if i == 0 {
-        None
-    } else {
-        Some(&rest[..i])
-    }
-}
-
-fn next_char_len(rest: &str) -> usize {
-    rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1)
-}
-
-fn classify_word(word: &str, prev_word: Option<&str>) -> SemanticType {
-    let lower = word.to_ascii_lowercase();
-
-    // Event name following `on`.
-    if prev_word.map(|p| p.eq_ignore_ascii_case("on")).unwrap_or(false) {
-        return SemanticType::Event;
-    }
-    // Function name following `function`.
-    if prev_word.map(|p| p.eq_ignore_ascii_case("function")).unwrap_or(false) {
-        return SemanticType::Function;
-    }
-
-    if is_keyword(&lower) {
-        SemanticType::Keyword
-    } else if is_type(&lower) {
-        SemanticType::Type
-    } else if is_operator_word(&lower) {
-        SemanticType::Operator
-    } else {
-        SemanticType::Keyword
-    }
-}
-
-fn is_keyword(lower: &str) -> bool {
-    KEYWORDS.get_or_init(|| {
-        [
-            "on", "if", "else", "loop", "while", "for", "set", "delete", "clear",
-            "add", "remove", "give", "function", "command", "trigger", "options",
-            "execute", "return", "stop", "exit", "continue", "cancel", "wait",
-            "broadcast", "send", "make", "spawn", "teleport", "heal", "damage",
-            "play", "run", "with", "at", "to", "from", "into", "of", "in",
-            "named", "where", "by", "as", "and", "or", "not", "is", "isn't",
-            "true", "false", "yes", "no", "now", "every", "after", "before",
-        ]
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>()
-    })
-    .contains(lower)
+    merged.push(cur);
+    merged
 }
 
 fn is_type(lower: &str) -> bool {
-    TYPES.get_or_init(|| {
-        [
-            "player", "players", "number", "numbers", "integer", "text", "string",
-            "strings", "location", "locations", "entity", "entities", "item",
-            "items", "itemstack", "itemtype", "boolean", "world", "worlds",
-            "gamemode", "material", "materials", "block", "blocks", "object",
-            "objects", "slot", "inventory", "enchantment", "potion", "vector",
-            "direction", "date", "timespan", "timeperiod", "damagecause",
-            "entitytype", "entitydata", "livingentity", "offlineplayer",
-            "commandsender", "color", "chatcolor",
-        ]
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>()
-    })
-    .contains(lower)
+    TYPES
+        .get_or_init(|| {
+            [
+                "player", "players", "number", "numbers", "integer", "text", "string",
+                "strings", "location", "locations", "entity", "entities", "item",
+                "items", "itemstack", "itemtype", "boolean", "world", "worlds",
+                "gamemode", "material", "materials", "block", "blocks", "object",
+                "objects", "slot", "inventory", "enchantment", "potion", "vector",
+                "direction", "date", "timespan", "timeperiod", "damagecause",
+                "entitytype", "entitydata", "livingentity", "offlineplayer",
+                "commandsender", "color", "chatcolor",
+            ]
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+        })
+        .contains(lower)
 }
 
 fn is_operator_word(lower: &str) -> bool {
@@ -331,21 +272,25 @@ fn is_operator_word(lower: &str) -> bool {
     )
 }
 
+/// Check if a `#` at the current position in a line is (probably) inside
+/// a double-quoted string. Cheap heuristic: odd number of unescaped
+/// double-quotes before the position means we are inside a string.
 fn is_inside_string(before: &str) -> bool {
-    let mut in_string = false;
+    let mut in_str = false;
     let mut prev = ' ';
     for c in before.chars() {
         if c == '"' && prev != '\\' {
-            in_string = !in_string;
+            in_str = !in_str;
         }
         prev = c;
     }
-    in_string
+    in_str
 }
 
 // Static sets, built once and cached.
-static KEYWORDS: OnceLock<HashSet<&'static str>> = OnceLock::new();
 static TYPES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+// ---- tests ------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -392,5 +337,57 @@ mod tests {
     fn ignores_hash_inside_string() {
         let toks = tokenize(r#"send "a # b""#);
         assert!(toks.iter().all(|t| t.ty != SemanticType::Comment));
+    }
+
+    #[test]
+    fn tokenizes_string_interpolation() {
+        let toks = tokenize(r#"send "hello %{name}% world""#);
+        let strings: Vec<_> = toks
+            .iter()
+            .filter(|t| t.ty == SemanticType::String)
+            .collect();
+        // StrText fragments + the optional String token for the leading
+        // portion all come through as `SemanticType::String`.
+        assert!(!strings.is_empty(), "expected at least one string token");
+    }
+
+    #[test]
+    fn tokenizes_minimessage_tag() {
+        let toks = tokenize(r#"send "<red>text</red>""#);
+        let strings: Vec<_> = toks
+            .iter()
+            .filter(|t| t.ty == SemanticType::String)
+            .collect();
+        assert!(!strings.is_empty(), "expected at least one string token");
+    }
+
+    #[test]
+    fn tokenizes_variable_nested_braces() {
+        let toks = tokenize("set {_list::%{x}%} to 1");
+        let vars: Vec<_> = toks
+            .iter()
+            .filter(|t| t.ty == SemanticType::Variable)
+            .collect();
+        assert_eq!(vars.len(), 1);
+    }
+
+    #[test]
+    fn tokenizes_type_after_keyword() {
+        let toks = tokenize("set {_x} to player");
+        let types: Vec<_> = toks
+            .iter()
+            .filter(|t| t.ty == SemanticType::Type)
+            .collect();
+        assert!(!types.is_empty(), "expected at least one type token");
+    }
+
+    #[test]
+    fn tokenizes_operator_word() {
+        let toks = tokenize("x contains y");
+        let ops: Vec<_> = toks
+            .iter()
+            .filter(|t| t.ty == SemanticType::Operator)
+            .collect();
+        assert!(!ops.is_empty(), "expected at least one operator token");
     }
 }
