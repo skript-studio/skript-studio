@@ -2,7 +2,7 @@
 
 use crate::ast::{
     AssignmentTarget, Expression, NodeRef, Program, Span, Statement, TopLevelItem, Visitor,
-    node_at_offset, walk_expression,
+    node_at_offset, walk_assignment_target, walk_expression,
 };
 use crate::semantic::SemanticAnalysis;
 
@@ -162,6 +162,7 @@ impl Visitor for VarRefVisitor<'_> {
                 self.results.push(v.span);
             }
         }
+        walk_assignment_target(self, target);
     }
 
     fn visit_expression(&mut self, expr: &Expression) {
