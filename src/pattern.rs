@@ -18,6 +18,7 @@
 //! `%*%` and `%-*%` are treated as catch-all placeholders.
 
 use regex::{Regex, RegexBuilder};
+use std::sync::OnceLock;
 
 /// A single piece of a parsed Skript pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +63,11 @@ pub struct CompiledPattern {
     /// One regex per prefix length `k` (1-based), compiled from
     /// `tokens[0..k]`. When the k-th token is a type placeholder it emits
     /// `(.*)` (empty allowed, greedy to the end of input) so a bare keyword
-    /// prefix still matches.
-    pub prefix_regexes: Vec<Regex>,
+    /// prefix still matches. Built lazily on first [`CompiledPattern::matches_prefix`]
+    /// call: the syntax index compiles ~15-20k variants at startup, and
+    /// eagerly compiling one extra regex per token for every variant paid for
+    /// a matcher with no production caller.
+    pub prefix_regexes: OnceLock<Vec<Regex>>,
     /// `(type_name, capture_index)` pairs, one per `%type%` in source order.
     /// Capture indices are 1-based and align with the regex's groups.
     pub type_groups: Vec<(String, usize)>,
@@ -92,8 +96,15 @@ impl CompiledPattern {
         }
 
         let words = literal_words(&self.tokens);
+        // Unreachable in practice: every prefix of valid top-level tokens
+        // compiles if the full pattern does (each token emits a closed
+        // group), so a build error degrades to "no prefix match" instead of
+        // panicking.
+        let prefix_regexes = self
+            .prefix_regexes
+            .get_or_init(|| build_prefix_regexes(&self.tokens).unwrap_or_default());
         for k in (1..=self.tokens.len()).rev() {
-            let Some(caps) = self.prefix_regexes[k - 1].captures(text) else {
+            let Some(caps) = prefix_regexes[k - 1].captures(text) else {
                 continue;
             };
             let whole = match caps.get(0) {
@@ -333,25 +344,6 @@ pub fn compile_pattern(parsed: &ParsedPattern) -> Result<CompiledPattern, regex:
     full_builder.case_insensitive(true);
     let full_regex = full_builder.build()?;
 
-    // One prefix regex per prefix length. The k-th token emits `(.*)`
-    // instead of `(.+?)` when it is a type placeholder: the `*` allows an
-    // empty value (e.g. bare `send` for `send %text% to %player%`), and the
-    // greedy quantifier extends to the end of the input so the caller's
-    // full-consumption check (`m.end() == text.len()`) is meaningful — a
-    // lazy `(.*?)` would stop at the shortest prefix instead.
-    let mut prefix_regexes = Vec::with_capacity(parsed.tokens.len());
-    for k in 1..=parsed.tokens.len() {
-        let mut prefix_pattern = String::new();
-        emit_tokens(&parsed.tokens[..k - 1], &mut prefix_pattern);
-        match &parsed.tokens[k - 1] {
-            PatternToken::TypePlaceholder(_) => prefix_pattern.push_str("(.*)"),
-            last => emit_token(last, &mut prefix_pattern),
-        }
-        let mut prefix_builder = RegexBuilder::new(&prefix_pattern);
-        prefix_builder.case_insensitive(true);
-        prefix_regexes.push(prefix_builder.build()?);
-    }
-
     let is_bare_type = parsed.tokens.iter().all(|t| {
         matches!(t, PatternToken::TypePlaceholder(_))
     });
@@ -360,11 +352,33 @@ pub fn compile_pattern(parsed: &ParsedPattern) -> Result<CompiledPattern, regex:
         regex,
         full_regex,
         tokens: parsed.tokens.clone(),
-        prefix_regexes,
+        prefix_regexes: OnceLock::new(),
         type_groups: type_groups_for(&parsed.tokens),
         is_bare_type,
         original: parsed.original.clone(),
     })
+}
+
+/// Compile one regex per prefix length. The k-th token emits `(.*)` instead
+/// of `(.+?)` when it is a type placeholder: the `*` allows an empty value
+/// (e.g. bare `send` for `send %text% to %player%`), and the greedy
+/// quantifier extends to the end of the input so the caller's full-consumption
+/// check (`m.end() == text.len()`) is meaningful — a lazy `(.*?)` would stop
+/// at the shortest prefix instead.
+fn build_prefix_regexes(tokens: &[PatternToken]) -> Result<Vec<Regex>, regex::Error> {
+    let mut prefix_regexes = Vec::with_capacity(tokens.len());
+    for k in 1..=tokens.len() {
+        let mut prefix_pattern = String::new();
+        emit_tokens(&tokens[..k - 1], &mut prefix_pattern);
+        match &tokens[k - 1] {
+            PatternToken::TypePlaceholder(_) => prefix_pattern.push_str("(.*)"),
+            last => emit_token(last, &mut prefix_pattern),
+        }
+        let mut prefix_builder = RegexBuilder::new(&prefix_pattern);
+        prefix_builder.case_insensitive(true);
+        prefix_regexes.push(prefix_builder.build()?);
+    }
+    Ok(prefix_regexes)
 }
 
 /// Walk the token tree and emit a regex string. The `original` is passed for
