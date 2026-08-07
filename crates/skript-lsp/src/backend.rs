@@ -6,7 +6,8 @@
 //! (and then re-published for every open document).
 //!
 //! LSP version: 3.17. We advertise only the capabilities we actually
-//! implement (completion, hover, diagnostics push, semanticTokens/full).
+//! implement (completion, hover, diagnostics push, semanticTokens/full,
+//! document symbols, folding, go-to-definition).
 
 use crate::folding;
 use crate::options::{InitOptions, SkriptRcToml};
@@ -14,6 +15,7 @@ use crate::state::AppState;
 use serde_json::Value;
 use skript_core::completion::{self, CompletionContext};
 use skript_core::hover;
+use skript_core::references;
 use skript_core::tokens::{self, SemanticType};
 use skript_core::validation::{self, Severity};
 use tower_lsp::jsonrpc::Result as RpcResult;
@@ -21,13 +23,13 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeParams, Hover, HoverContents, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, MarkupContent,
-    MarkupKind, OneOf, Position, Range, SemanticToken, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
-    SemanticTokensServerCapabilities, SemanticTokenType, ServerCapabilities, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind,
-    FoldingRangeProviderCapability,
+    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
+    MarkupContent, MarkupKind, OneOf, Position, Range, SemanticToken, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
+    SemanticTokensResult, SemanticTokensServerCapabilities, SemanticTokenType,
+    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -214,8 +216,9 @@ impl LanguageServer for Backend {
             )),
             document_symbol_provider: Some(OneOf::Left(true)),
             folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
-            // Explicitly NOT advertising: definition, references, rename,
-            // formatting, code_action, signature_help.
+            definition_provider: Some(OneOf::Left(true)),
+            // Explicitly NOT advertising: references, rename, formatting,
+            // code_action, signature_help.
             ..Default::default()
         };
 
@@ -455,6 +458,38 @@ impl LanguageServer for Backend {
         };
         let ranges = folding::compute_folding_ranges(&text);
         Ok(Some(ranges))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> RpcResult<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let pos = params.text_document_position_params.position;
+
+        // Resolve the symbol at the cursor via the cached snapshot, then jump
+        // to its declaration span. Falls back to `None` (no definition found)
+        // when the position isn't a resolvable reference/declaration.
+        let location = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let symbol = references::find_symbol_at_offset(
+                    &snap.parse_result.program,
+                    &snap.analysis,
+                    offset,
+                )?;
+                Some(Location {
+                    uri: params.text_document_position_params.text_document.uri.clone(),
+                    range: span_to_range(&text, symbol.declaration_span),
+                })
+            })
+            .flatten();
+
+        Ok(location.map(GotoDefinitionResponse::Scalar))
     }
 
     async fn shutdown(&self) -> RpcResult<()> {
