@@ -4,8 +4,7 @@
 //! (highest first):
 //!   1. Command-line flags (set by the Tauri sidecar launcher)
 //!   2. `initializationOptions` sent by the client in the LSP `initialize` request
-//!   3. `workspace/configuration` (`"skript"` section), which can change at runtime
-//!   4. Built-in defaults
+//!   3. Built-in defaults
 //!
 //! All stdout discipline lives elsewhere; this module only describes values.
 
@@ -86,17 +85,8 @@ pub struct InitOptions {
     pub max_completions: Option<usize>,
 }
 
-/// `workspace/configuration` (`"skript"` section) shape. Same fields as
-/// [`InitOptions`]; kept separate for clarity but structurally compatible.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct WorkspaceConfig {
-    pub max_completions: Option<usize>,
-}
-
-/// Effective runtime configuration after merging CLI + init + workspace +
-/// defaults. Owned by [`crate::state::AppState`] and updated in place when the
-/// client pushes a configuration change.
+/// Effective runtime configuration after merging CLI + init + defaults.
+/// Owned by [`crate::state::AppState`].
 #[derive(Debug, Clone)]
 pub struct EffectiveConfig {
     /// Cap on the number of completion items returned per request.

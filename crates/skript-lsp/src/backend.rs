@@ -754,6 +754,7 @@ fn top_level_to_document_symbol(
                 range,
                 selection_range: range,
                 children: Some(vec![]),
+                #[allow(deprecated)]
                 deprecated: None,
                 tags: None,
             })
@@ -767,6 +768,7 @@ fn top_level_to_document_symbol(
                 range,
                 selection_range: range,
                 children: Some(vec![]),
+                #[allow(deprecated)]
                 deprecated: None,
                 tags: None,
             })
@@ -780,6 +782,7 @@ fn top_level_to_document_symbol(
                 range,
                 selection_range: range,
                 children: Some(vec![]),
+                #[allow(deprecated)]
                 deprecated: None,
                 tags: None,
             })
@@ -793,6 +796,7 @@ fn top_level_to_document_symbol(
                 range,
                 selection_range: range,
                 children: Some(vec![]),
+                #[allow(deprecated)]
                 deprecated: None,
                 tags: None,
             })

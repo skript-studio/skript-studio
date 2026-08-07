@@ -12,7 +12,7 @@
 use crate::options::EffectiveConfig;
 use include_dir::{include_dir, Dir};
 use skript_core::matching::{EntryTable, SyntaxIndex};
-use skript_core::parser::incremental::{incremental_update, split_sections, Section};
+use skript_core::parser::incremental::incremental_update;
 use skript_core::parser::ParseResult;
 use skript_core::semantic::{analyze, SemanticAnalysis};
 use skript_core::parse_program;
@@ -25,24 +25,21 @@ use tokio::sync::Mutex;
 pub struct DocumentSnapshot {
     pub parse_result: ParseResult,
     pub analysis: SemanticAnalysis,
-    pub sections: Vec<Section>,
 }
 
 impl DocumentSnapshot {
     /// Create a fresh snapshot by parsing + analyzing the source.
     pub fn new(source: &str) -> Self {
         let parse_result = parse_program(source);
-        let sections = split_sections(source);
         let analysis = analyze(&parse_result.program);
-        DocumentSnapshot { parse_result, analysis, sections }
+        DocumentSnapshot { parse_result, analysis }
     }
 
     /// Incrementally update from a previous snapshot.
     pub fn update(old_source: &str, new_source: &str, old: &DocumentSnapshot) -> Self {
         let parse_result = incremental_update(old_source, new_source, &old.parse_result.program);
-        let sections = split_sections(new_source);
         let analysis = analyze(&parse_result.program);
-        DocumentSnapshot { parse_result, analysis, sections }
+        DocumentSnapshot { parse_result, analysis }
     }
 }
 
