@@ -7,12 +7,14 @@
 //!
 //! LSP version: 3.17. We advertise only the capabilities we actually
 //! implement (completion, hover, diagnostics push, semanticTokens/full,
-//! document symbols, folding, go-to-definition, references, signature help).
+//! document symbols, folding, go-to-definition, references, signature help,
+//! inlay hints).
 
 use crate::folding;
 use crate::options::{InitOptions, SkriptRcToml};
 use crate::state::AppState;
 use serde_json::Value;
+use skript_core::ast::Visitor;
 use skript_core::completion::{self, CompletionContext};
 use skript_core::hover;
 use skript_core::references;
@@ -27,8 +29,9 @@ use tower_lsp::lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, Location,
-    MarkupContent, MarkupKind, OneOf, ParameterInformation, ParameterLabel, Position, Range,
+    InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintKind,
+    InlayHintLabel, InlayHintParams, InsertTextFormat, Location, MarkupContent, MarkupKind, OneOf,
+    ParameterInformation, ParameterLabel, Position, Range,
     ReferenceParams, SemanticToken, SemanticTokens, SemanticTokensFullOptions,
     SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
     SemanticTokensServerCapabilities, SemanticTokenType, ServerCapabilities, SignatureHelp,
@@ -228,6 +231,7 @@ impl LanguageServer for Backend {
                 retrigger_characters: Some(vec![",".to_owned()]),
                 ..Default::default()
             }),
+            inlay_hint_provider: Some(OneOf::Left(true)),
             // Explicitly NOT advertising: rename, formatting.
             ..Default::default()
         };
@@ -662,6 +666,32 @@ impl LanguageServer for Backend {
         Ok(Some(actions))
     }
 
+    async fn inlay_hint(
+        &self,
+        params: InlayHintParams,
+    ) -> RpcResult<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+
+        // Walk the whole document (params.range is intentionally ignored) and
+        // collect one type hint per variable assignment with a known inferred
+        // type. No snapshot (document not yet analyzed) degrades to no hints.
+        let hints = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                let mut hints = Vec::new();
+                for item in &snap.parse_result.program.items {
+                    collect_type_hints(item, &snap.analysis, &text, &mut hints);
+                }
+                hints
+            })
+            .unwrap_or_default();
+
+        Ok(Some(hints))
+    }
+
     async fn shutdown(&self) -> RpcResult<()> {
         tracing::info!("shutdown requested");
         Ok(())
@@ -769,6 +799,71 @@ fn top_level_to_document_symbol(
         }
         _ => None,
     }
+}
+
+/// Collect inlay type hints for every assignment inside a top-level item.
+///
+/// Uses [`skript_core::ast::Visitor`] to walk the whole statement tree —
+/// including statements nested inside sections such as function/event bodies,
+/// if/else branches, and loops — and emits one hint per assignment whose
+/// target is a plain variable and whose value has a known inferred type. The
+/// hint label is the type, rendered right after the variable name
+/// (`set {_msg}: text to "hi"`).
+fn collect_type_hints(
+    item: &skript_core::ast::TopLevelItem,
+    analysis: &skript_core::semantic::SemanticAnalysis,
+    source: &str,
+    hints: &mut Vec<InlayHint>,
+) {
+    /// Visitor collecting hints for `Statement::Assignment` nodes. Delegates
+    /// to [`skript_core::ast::walk_statement`] after each statement so the
+    /// walk keeps recursing into nested sections.
+    struct TypeHintCollector<'a> {
+        analysis: &'a skript_core::semantic::SemanticAnalysis,
+        source: &'a str,
+        hints: &'a mut Vec<InlayHint>,
+    }
+
+    impl skript_core::ast::Visitor for TypeHintCollector<'_> {
+        fn visit_statement(&mut self, statement: &skript_core::ast::Statement) {
+            if let skript_core::ast::Statement::Assignment(assignment) = statement {
+                if let skript_core::ast::AssignmentTarget::Variable(variable) =
+                    &assignment.target
+                {
+                    // The type inference table is keyed by the value
+                    // expression's span start; unknown expressions map to
+                    // `TypeInfo::Unknown` and are skipped.
+                    let ty = self
+                        .analysis
+                        .type_inference
+                        .get_type(assignment.value.span().start);
+                    if let skript_core::semantic::types::TypeInfo::Known(ty) = ty {
+                        // Hint renders right after the variable name.
+                        let (line, col) =
+                            skript_core::validation::offset_to_linecol(self.source, variable.span.end);
+                        self.hints.push(InlayHint {
+                            position: Position::new(line, col),
+                            label: InlayHintLabel::String(format!(": {ty}")),
+                            kind: Some(InlayHintKind::TYPE),
+                            text_edits: None,
+                            tooltip: None,
+                            padding_left: None,
+                            padding_right: None,
+                            data: None,
+                        });
+                    }
+                }
+            }
+            skript_core::ast::walk_statement(self, statement);
+        }
+    }
+
+    let mut visitor = TypeHintCollector {
+        analysis,
+        source,
+        hints,
+    };
+    visitor.visit_top_level_item(item);
 }
 
 /// Encode semantic tokens in the LSP relative-position delta format.
