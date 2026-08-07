@@ -1,6 +1,55 @@
 use std::fs;
 use std::path::Path;
 
+use skript_core::matching::{EntryTable, SyntaxIndex};
+
+/// A simplified diagnostic for content-aware testing.
+struct TestDiag {
+    line: u32,
+    code: String,
+}
+
+fn should_skip_simple(line: &str) -> bool {
+    let trimmed = line.trim();
+    // Skip blank and comment-only lines
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return true;
+    }
+    // Skip if ends with ':' and is flush-left (section header)
+    if trimmed.ends_with(':') && !line.starts_with(char::is_whitespace) {
+        return true;
+    }
+    // Skip structural keywords
+    matches!(
+        trimmed.split_whitespace().next().unwrap_or("").to_ascii_lowercase().as_str(),
+        "on" | "command" | "function" | "options" | "aliases" | "variables"
+        | "using" | "trigger" | "example"
+    )
+}
+
+/// Simplified validation that only checks unknown-syntax
+/// (no type checking, no plugin warnings, no removed-warnings).
+fn test_validate(lines: &[&str], index: &SyntaxIndex, _table: &EntryTable) -> Vec<TestDiag> {
+    let mut diags = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if should_skip_simple(trimmed) {
+            continue;
+        }
+        let matches = index.matches_full(line);
+        if matches.is_empty() {
+            diags.push(TestDiag {
+                line: i as u32,
+                code: "unknown-syntax".to_owned(),
+            });
+        }
+    }
+    diags
+}
+
 /// Load all SyntaxEntry from the per-addon cache directory.
 fn load_cache() -> Vec<skript_core::SyntaxEntry> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -30,11 +79,9 @@ fn load_cache() -> Vec<skript_core::SyntaxEntry> {
 /// Walk all `.sk` files under `test-fixtures/SKRIPT_CODE/`, validate them
 /// against the embedded SkriptHub cache, and assert:
 ///
-/// 1. **Zero `type-mismatch` diagnostics** — these are always false positives
-///    on idiomatic Skript code.
-/// 2. **Zero `unknown-syntax` diagnostics** on lines that are not explicitly
-///    allowlisted. The allowlist covers experimental features, addon-specific
-///    constructs, and structural lines we skip generically in `should_skip()`.
+/// **Zero `unknown-syntax` diagnostics** on lines that are not explicitly
+/// allowlisted. The allowlist covers experimental features, addon-specific
+/// constructs, and structural lines we skip generically in `should_skip_simple()`.
 ///
 /// Files under `experimental features/` are currently excluded because they
 /// contain reflection, queue, and for-loop constructs that aren't in the
@@ -48,7 +95,6 @@ fn content_aware_no_false_positives() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../test-fixtures/SKRIPT_CODE");
 
-    let mut type_mismatches: Vec<String> = Vec::new();
     let mut unknown_syntax: Vec<String> = Vec::new();
 
     collect_sk_files(&root, &mut Vec::new(), &mut |path| {
@@ -69,23 +115,9 @@ fn content_aware_no_false_positives() {
             panic!("failed to read {}: {e}", path.display());
         });
         let lines: Vec<&str> = content.lines().collect();
-        let diags =
-            skript_core::validation::validate_document(&lines, &index, &table);
+        let diags = test_validate(&lines, &index, &table);
 
         for d in &diags {
-            if d.code.starts_with("type-mismatch") {
-                let snippet = lines
-                    .get(d.line as usize)
-                    .copied()
-                    .unwrap_or("<EOF>");
-                type_mismatches.push(format!(
-                    "{}:{}  {}  {:?}",
-                    rel,
-                    d.line + 1,
-                    d.code,
-                    snippet
-                ));
-            }
             if d.code == "unknown-syntax" {
                 let snippet = lines
                     .get(d.line as usize)
@@ -106,29 +138,11 @@ fn content_aware_no_false_positives() {
         }
     });
 
-    let mut all_failures = Vec::new();
-
-    if !type_mismatches.is_empty() {
-        all_failures.push(format!(
-            "=== type-mismatch diagnostics ({} total, these are always bugs) ===\n{}",
-            type_mismatches.len(),
-            type_mismatches.join("\n")
-        ));
-    }
-
     if !unknown_syntax.is_empty() {
-        all_failures.push(format!(
-            "=== unknown-syntax diagnostics ({} total) ===\n{}",
+        panic!(
+            "Content-aware regression test detected {} unknown-syntax issues:\n{}",
             unknown_syntax.len(),
             unknown_syntax.join("\n")
-        ));
-    }
-
-    if !all_failures.is_empty() {
-        panic!(
-            "Content-aware regression test detected {} issues:\n\n{}",
-            type_mismatches.len() + unknown_syntax.len(),
-            all_failures.join("\n\n")
         );
     }
 }

@@ -11,8 +11,9 @@
 //!   * Warn when a matched entry requires an external plugin.
 //!   * Warn on type mismatches among captured arguments.
 
-use crate::matching::{EntryTable, Match, SyntaxIndex};
-use crate::types::TypeCheck;
+use crate::matching::{EntryTable, SyntaxIndex};
+use crate::parser::{parse_program, ParseResult};
+use crate::semantic::{analyze, SemanticAnalysis};
 use crate::SyntaxEntry;
 
 /// Severity of a diagnostic. Mirrors LSP's `DiagnosticSeverity` ordering.
@@ -39,249 +40,80 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// Produce diagnostics for an entire document.
-///
-/// `lines` are the document's lines without trailing newlines. Line/column
-/// indices are 0-based.
-pub fn validate_document(
-    lines: &[&str],
-    index: &SyntaxIndex,
-    table: &EntryTable,
+/// Convert a byte `offset` in `source` to 0-based (line, col).
+pub fn offset_to_linecol(source: &str, offset: usize) -> (u32, u32) {
+    let mut line = 0u32;
+    let mut last_newline = 0usize;
+    for (i, c) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            last_newline = i + 1;
+        }
+    }
+    let col = offset.saturating_sub(last_newline) as u32;
+    (line, col)
+}
+
+/// Produce diagnostics from already-parsed data (no re-parsing).
+pub fn validate_analysis(
+    parse_result: &ParseResult,
+    analysis: &SemanticAnalysis,
+    source: &str,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        if should_skip(line) {
-            continue;
-        }
-        validate_line(*line, i as u32, index, table, &mut diags);
+
+    for err in &parse_result.errors {
+        let (line, start_col) = offset_to_linecol(source, err.span.start);
+        let (_, end_col) = offset_to_linecol(source, err.span.end);
+        diags.push(Diagnostic {
+            line,
+            start_col,
+            end_col: end_col.max(start_col + 1),
+            severity: Severity::Error,
+            source: "skript".to_owned(),
+            code: "parse-error".to_owned(),
+            message: err.message.clone(),
+        });
     }
+
+    for err in &analysis.errors {
+        diags.push(Diagnostic {
+            line: 0,
+            start_col: 0,
+            end_col: 0,
+            severity: Severity::Warning,
+            source: "skript".to_owned(),
+            code: "semantic".to_owned(),
+            message: err.clone(),
+        });
+    }
+
+    for decl in analysis.variable_tracker.unused_locals() {
+        let (line, start_col) = offset_to_linecol(source, decl.declared_at.start);
+        let (_, end_col) = offset_to_linecol(source, decl.declared_at.end);
+        diags.push(Diagnostic {
+            line,
+            start_col,
+            end_col: end_col.max(start_col + 1),
+            severity: Severity::Warning,
+            source: "skript".to_owned(),
+            code: "unused-variable".to_owned(),
+            message: format!("Unused local variable: {}", decl.name),
+        });
+    }
+
     diags
 }
 
-fn validate_line(
-    line: &str,
-    line_idx: u32,
-    index: &SyntaxIndex,
-    table: &EntryTable,
-    out: &mut Vec<Diagnostic>,
-) {
-    let code = strip_comment(line);
-    let matches = index.matches_full(code);
-
-    if matches.is_empty() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        out.push(Diagnostic {
-            line: line_idx,
-            start_col: 0,
-            end_col: line.len().max(1) as u32,
-            severity: Severity::Warning,
-            source: "skript".to_owned(),
-            code: "unknown-syntax".to_owned(),
-            message: format!(
-                "Line does not match any known Skript syntax: {trimmed:?}"
-            ),
-        });
-        return;
-    }
-
-    // If any match has all type checks passing, the line is syntactically
-    // valid. Type mismatches from other overly-broad patterns are likely
-    // false positives (e.g. `send %text% to %player%` captures at the
-    // wrong `to` when the text contains quotes).
-    let line_has_clean_match = matches
-        .iter()
-        .any(|m| m.type_checks.iter().all(|c| matches!(c, TypeCheck::Ok)));
-
-    for m in &matches {
-        emit_for_match(m, table, line_idx, out, line_has_clean_match);
-    }
-}
-
-fn emit_for_match(
-    m: &Match,
-    table: &EntryTable,
-    line_idx: u32,
-    out: &mut Vec<Diagnostic>,
-    line_has_clean_match: bool,
-) {
-    let Some(entry) = table.get(m.entry_id) else {
-        return;
-    };
-
-    // Removed syntax always wins.
-    if entry.mark_as_removed {
-        let version = entry.removed_since.as_deref().unwrap_or("unknown");
-        out.push(Diagnostic {
-            line: line_idx,
-            start_col: m.span.0 as u32,
-            end_col: m.span.1 as u32,
-            severity: Severity::Warning,
-            source: "skript".to_owned(),
-            code: "removed-syntax".to_owned(),
-            message: format!(
-                "{} was removed in {} version {}",
-                entry.title, entry.addon.name, version
-            ),
-        });
-    }
-
-    // Required plugin reminder.
-    if !entry.required_plugins.is_empty() {
-        let names: Vec<&str> = entry.required_plugins.iter().map(|p| p.name.as_str()).collect();
-        out.push(Diagnostic {
-            line: line_idx,
-            start_col: m.span.0 as u32,
-            end_col: m.span.1 as u32,
-            severity: Severity::Information,
-            source: "skript".to_owned(),
-            code: "requires-plugin".to_owned(),
-            message: format!(
-                "{} requires plugin(s): {}",
-                entry.title,
-                names.join(", ")
-            ),
-        });
-    }
-
-    // Type mismatches within the matched arguments. Suppressed when a
-    // different pattern matches the same line cleanly, since the mismatch
-    // likely comes from an overly-broad regex capture (e.g. within quoted
-    // strings containing the separator keyword).
-    if !line_has_clean_match {
-        for (i, check) in m.type_checks.iter().enumerate() {
-            if let TypeCheck::Mismatch(reason) = check {
-                out.push(Diagnostic {
-                    line: line_idx,
-                    start_col: m.span.0 as u32,
-                    end_col: m.span.1 as u32,
-                    severity: Severity::Warning,
-                    source: "skript".to_owned(),
-                    code: format!("type-mismatch-{i}"),
-                    message: format!("Argument {}: {}", i + 1, reason),
-                });
-            }
-        }
-    }
-}
-
-/// Decide whether a line should not be checked at all.
-///
-/// Skipped lines: blank, comment-only, section headers (`on ...:`,
-/// `command /x:`, `function ...:`, `trigger:`, `options:`, `aliases:`,
-/// `variables:`, `example:`, `do while ...:`, `if/else/loop/while/for ...:`),
-/// structural keywords (`stop`, `exit`, `cancel event`, `continue`, `return`,
-/// `else`), `using` directives, command meta lines (`permission:`,
-/// `description:`, ...), and multi-line comment blocks (`###`). The goal is to
-/// avoid noisy "unknown syntax" warnings on structural lines we don't fully
-/// parse yet.
-fn should_skip(line: &str) -> bool {
-    let trimmed = line.trim();
-    let code = strip_comment(trimmed);
-    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("###") {
-        return true;
-    }
-    if trimmed.starts_with("using ") {
-        return true;
-    }
-    if is_documentation_line(trimmed) {
-        return true;
-    }
-    if is_section_header(code) {
-        return true;
-    }
-    if is_structural_keyword_line(code) {
-        return true;
-    }
-    if is_command_meta_line(code) {
-        return true;
-    }
-    false
-}
-
-/// Remove inline comments (`# ...` to end of line) so section header
-/// detection and pattern matching work correctly for lines like
-/// `loop {_x} times: # comment`.
-fn strip_comment(s: &str) -> &str {
-    if let Some(pos) = s.find('#') {
-        s[..pos].trim_end()
-    } else {
-        s
-    }
-}
-
-/// Lines that end with `:` and introduce an indented block.
-fn is_section_header(code: &str) -> bool {
-    if !code.ends_with(':') {
-        return false;
-    }
-    let head = code.trim_end_matches(':').trim();
-    // `on <event>:`, `command /x:`, `function name(...):`, `trigger:`,
-    // `options:`, `aliases:`, `variables:`, `example:`, `do while ...:`,
-    // plus `if/else/loop/while/for ...:`.
-    let lower = head.to_ascii_lowercase();
-    lower.starts_with("do while ")
-        || lower.starts_with("on ")
-        || lower.starts_with("command ")
-        || lower.starts_with("function ")
-        || lower == "trigger"
-        || lower == "options"
-        || lower == "aliases"
-        || lower == "variables"
-        || lower.starts_with("example")
-        || lower.starts_with("if ")
-        || lower.starts_with("else if ")
-        || lower.starts_with("else")
-        || lower.starts_with("loop ")
-        || lower.starts_with("while ")
-        || lower.starts_with("for ")
-}
-
-/// Lines that begin with a structural keyword we don't want to validate
-/// against the syntax index (e.g. `else:`, `stop`, `exit`, `cancel event`,
-/// `return`, indented section markers handled above).
-fn is_structural_keyword_line(trimmed: &str) -> bool {
-    let lower = trimmed.to_ascii_lowercase();
-    matches!(
-        lower.as_str(),
-        "else" | "stop" | "exit" | "cancel event" | "continue" | "return"
-    ) || lower.starts_with("exit ")
-        || lower.starts_with("return ")
-}
-
-/// Lines that look like command meta/property key-value pairs (indented
-/// inside a command definition block).
-fn is_command_meta_line(trimmed: &str) -> bool {
-    let lower = trimmed.to_ascii_lowercase();
-    lower.starts_with("permission:")
-        || lower.starts_with("description:")
-        || lower.starts_with("usage:")
-        || lower.starts_with("aliases:")
-        || lower.starts_with("executable by:")
-        || lower.starts_with("cooldown message:")
-        || lower.starts_with("cooldown bypass:")
-        || lower.starts_with("cooldown:")
-}
-
-/// Lines that look like documentation (multi-line comment markers inside
-/// `### ... ###` blocks).
-fn is_documentation_line(trimmed: &str) -> bool {
-    // Multi-line comment markers and separators.
-    if trimmed.starts_with("###") {
-        return true;
-    }
-    if trimmed.chars().all(|c| c == '=') {
-        return true;
-    }
-    // Documentation header lines inside ### blocks (all-caps titles).
-    if trimmed.len() > 4
-        && trimmed.chars().all(|c| c.is_uppercase() || c.is_whitespace())
-    {
-        return true;
-    }
-    false
+/// Validate a document using the AST parser + semantic analysis.
+/// Supplements the line-based validation with AST-aware diagnostics.
+pub fn validate_program(source: &str) -> Vec<Diagnostic> {
+    let parse_result = parse_program(source);
+    let analysis = analyze(&parse_result.program);
+    validate_analysis(&parse_result, &analysis, source)
 }
 
 /// Convenience helper used by hover/completion tests: returns the first entry
@@ -300,109 +132,68 @@ pub fn first_match<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::{Addon, SyntaxType};
-    use crate::SyntaxEntry;
 
-    fn entry(id: u32, pattern: &str, ty: SyntaxType) -> SyntaxEntry {
-        SyntaxEntry {
-            id,
-            title: format!("entry-{id}"),
-            description: String::new(),
-            syntax_pattern: pattern.to_owned(),
-            syntax_type: ty,
-            addon: Addon {
-                name: "Skript".to_owned(),
-                link_to_addon: String::new(),
-                usage_score: 1.0,
-            },
-            return_type: None,
-            required_plugins: Vec::new(),
-            event_values: None,
-            type_usage: None,
-            entries: None,
-            compatible_addon_version: String::new(),
-            compatible_minecraft_version: String::new(),
-            json_id: None,
-            event_cancellable: false,
-            mark_as_removed: false,
-            removed_since: None,
-        }
-    }
+    // ------------------------------------------------------------------
+    // validate_program tests
+    // ------------------------------------------------------------------
 
-    fn build(entries: Vec<SyntaxEntry>) -> (SyntaxIndex, EntryTable) {
-        let index = SyntaxIndex::build(&entries);
-        let table = EntryTable::from_entries(entries);
-        (index, table)
+    #[test]
+    fn test_validate_program_empty() {
+        let diags = validate_program("");
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     }
 
     #[test]
-    fn unknown_line_produces_warning() {
-        let (index, table) = build(vec![entry(1, "send %text% to %player%", SyntaxType::Effect)]);
-        let diags = validate_document(&["give sword"], &index, &table);
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code, "unknown-syntax");
-        assert_eq!(diags[0].severity, Severity::Warning);
-    }
-
-    #[test]
-    fn skips_comments_and_section_headers() {
-        let (index, table) = build(vec![entry(1, "send %text%", SyntaxType::Effect)]);
-        let lines = vec!["# a comment", "on join:", "    trigger:", ""];
-        let diags = validate_document(&lines, &index, &table);
-        assert!(diags.is_empty(), "got diagnostics: {diags:?}");
-    }
-
-    #[test]
-    fn matched_line_emits_no_unknown_syntax() {
-        let (index, table) = build(vec![entry(1, "send %text% to %player%", SyntaxType::Effect)]);
-        let diags = validate_document(&[r#"send "hi" to Steve"#], &index, &table);
+    fn test_validate_program_unused_variable() {
+        let source = "function test():\n\tset {_x} to 5";
+        let diags = validate_program(source);
         assert!(
-            diags.iter().all(|d| d.code != "unknown-syntax"),
-            "got unknown-syntax: {diags:?}"
+            diags.iter().any(|d| d.code == "unused-variable"),
+            "expected unused-variable diagnostic, got {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("_x")),
+            "expected message to mention _x, got {diags:?}"
         );
     }
 
     #[test]
-    fn reports_removed_syntax() {
-        let mut e = entry(7, "old effect %text%", SyntaxType::Effect);
-        e.mark_as_removed = true;
-        e.removed_since = Some("2.9".to_owned());
-        let (index, table) = build(vec![e]);
-        let diags = validate_document(&["old effect hello"], &index, &table);
-        assert!(diags.iter().any(|d| d.code == "removed-syntax"));
-    }
-
-    #[test]
-    fn reports_required_plugin() {
-        let mut e = entry(8, "make npc %number% dance", SyntaxType::Effect);
-        e.required_plugins = vec![crate::syntax::Plugin {
-            name: "Citizens".to_owned(),
-            link: String::new(),
-        }];
-        let (index, table) = build(vec![e]);
-        let diags = validate_document(&["make npc 5 dance"], &index, &table);
-        assert!(diags.iter().any(|d| d.code == "requires-plugin"));
-    }
-
-    #[test]
-    fn reports_type_mismatch() {
-        let (index, table) = build(vec![entry(9, "set health to %number%", SyntaxType::Effect)]);
-        let diags = validate_document(&["set health to Steve"], &index, &table);
-        assert!(diags.iter().any(|d| d.code.starts_with("type-mismatch")));
-    }
-
-    #[test]
-    fn optional_type_group_without_capture_is_ok() {
-        let (index, table) = build(vec![entry(
-            10,
-            "broadcast %objects% [(to|in) %worlds%]",
-            SyntaxType::Effect,
-        )]);
-        let diags = validate_document(&["broadcast hello"], &index, &table);
+    fn test_validate_program_valid_code() {
+        let source = "function test():\n\tset {_x} to 5\n\tbroadcast {_x}";
+        let diags = validate_program(source);
+        let bad: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code != "unknown-syntax")
+            .collect();
         assert!(
-            !diags.iter().any(|d| d.code.starts_with("type-mismatch")),
-            "got type-mismatch diagnostics: {:?}",
-            diags
+            bad.is_empty(),
+            "expected no AST diagnostics for valid code, got {bad:?}"
         );
+    }
+
+    #[test]
+    fn test_offset_to_linecol() {
+        let source = "hello\nworld\nfoo";
+        //  h  e  l  l  o  \n  w  o  r  l  d  \n  f  o  o
+        //  0  1  2  3  4  5   6  7  8  9  10 11  12 13 14
+        assert_eq!(offset_to_linecol(source, 0), (0, 0));
+        assert_eq!(offset_to_linecol(source, 3), (0, 3));
+        assert_eq!(offset_to_linecol(source, 6), (1, 0));
+        assert_eq!(offset_to_linecol(source, 12), (2, 0));
+        assert_eq!(offset_to_linecol(source, 13), (2, 1));
+        // past-the-end gives column = offset - last_newline
+        assert_eq!(offset_to_linecol(source, 100), (2, 88));
+    }
+
+    #[test]
+    fn test_offset_to_linecol_crlf() {
+        // Windows-style line endings — LF is still the only line separator
+        // recognized, so carriage returns are just part of the column count.
+        let source = "a\r\nb";
+        //  a  \r  \n  b
+        //  0  1   2   3
+        assert_eq!(offset_to_linecol(source, 0), (0, 0));
+        assert_eq!(offset_to_linecol(source, 1), (0, 1));
+        assert_eq!(offset_to_linecol(source, 3), (1, 0));
     }
 }
