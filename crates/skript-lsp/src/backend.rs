@@ -445,7 +445,7 @@ impl LanguageServer for Backend {
         let max = self.state.config().max_completions;
         let mut items: Vec<skript_core::completion::CompletionItem> = self
             .state
-            .with_index(|_index, table| completion::completions(prefix, ctx, table, max))
+            .with_index(|table| completion::completions(prefix, ctx, table, max))
             .unwrap_or_default();
 
         // Add AST-aware completions in body context using cached snapshot
@@ -524,13 +524,28 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // 1. Old: syntax docs from SkriptHub (fallback)
-        let syntax_hover = self
+        // 1. Syntax docs from SkriptHub via the pattern engine thread.
+        //    The engine matches the line against all 13,661 compiled patterns
+        //    and returns the best-matching entry ID. We resolve it to a
+        //    SyntaxEntry via EntryTable for markdown rendering.
+        let syntax_hover = match self
             .state
-            .with_index(|index, table| hover::hover_at(line, pos.character, index, table))
-            .flatten();
+            .java_hover(line.to_string(), Some(pos.character as usize))
+            .await
+        {
+            Some((entry_id, span)) => self
+                .state
+                .with_index(|table| {
+                    table.get(entry_id).map(|entry| hover::HoverInfo {
+                        markdown: hover::render(entry),
+                        range: (span.0 as u32, span.1 as u32),
+                    })
+                })
+                .flatten(),
+            None => None,
+        };
 
-        // 2. New: AST-resolved hover using cached snapshot (takes priority — more precise)
+        // 2. AST-resolved hover using cached snapshot (takes priority — more precise)
         let ast_hover = self
             .state
             .with_snapshot(&uri, |snap| {

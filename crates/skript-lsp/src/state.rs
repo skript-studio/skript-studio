@@ -23,7 +23,7 @@
 
 use crate::options::EffectiveConfig;
 use include_dir::{include_dir, Dir};
-use skript_core::matching::{EntryTable, SyntaxIndex};
+use skript_core::matching::EntryTable;
 use skript_core::parse_program;
 use skript_core::parser::incremental::incremental_update;
 use skript_core::parser::ParseResult;
@@ -75,7 +75,6 @@ pub struct AppState {
 
 struct Inner {
     /// `None` until the first load completes; `Some` afterwards.
-    index: RwLock<Option<Arc<SyntaxIndex>>>,
     table: RwLock<Option<Arc<EntryTable>>>,
     /// `true` once the embedded cache has populated `index`/`table`.
     ready: AtomicBool,
@@ -92,6 +91,10 @@ struct Inner {
     /// Request channel to the java engine thread; `None` until the engine
     /// is started (always set while holding the `java_state` lock).
     java_requests: SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<JavaCheckRequest>>>,
+    /// Hover request channel to the engine thread; `None` until the engine
+    /// is started. Separate from `java_requests` so hover and check requests
+    /// don't block each other.
+    java_hover_requests: SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<JavaHoverRequest>>>,
 }
 
 /// Lifecycle + stats of the java engine thread.
@@ -134,6 +137,21 @@ enum JavaCheckReply {
     Unavailable,
 }
 
+/// A hover request sent to the engine thread.
+struct JavaHoverRequest {
+    line: String,
+    cursor: Option<usize>,
+    reply: tokio::sync::oneshot::Sender<JavaHoverReply>,
+}
+
+/// Hover reply from the engine thread. Plain data only (`Send`).
+enum JavaHoverReply {
+    /// The engine matched the line; here's the entry ID + span.
+    Match { entry_id: u32, span: (usize, usize) },
+    /// No match, or the engine is unavailable.
+    None,
+}
+
 const CACHE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/data/skripthub");
 
 /// Load entries from the embedded addon cache, filtering to only the
@@ -162,7 +180,6 @@ impl AppState {
     pub fn new(config: EffectiveConfig) -> Self {
         AppState {
             inner: Arc::new(Inner {
-                index: RwLock::new(None),
                 table: RwLock::new(None),
                 ready: AtomicBool::new(false),
                 docs: dashmap::DashMap::new(),
@@ -171,6 +188,7 @@ impl AppState {
                 java_state: SyncMutex::new(JavaState::Idle),
                 java_state_cv: Condvar::new(),
                 java_requests: SyncMutex::new(None),
+                java_hover_requests: SyncMutex::new(None),
             }),
         }
     }
@@ -254,14 +272,10 @@ impl AppState {
         self.inner.ready.load(Ordering::Acquire)
     }
 
-    /// Read-only access to the compiled index, if loaded.
-    pub fn with_index<R>(&self, f: impl FnOnce(&SyntaxIndex, &EntryTable) -> R) -> Option<R> {
-        let idx_guard = self.inner.index.read().unwrap();
+    /// Read-only access to the entry table, if loaded.
+    pub fn with_index<R>(&self, f: impl FnOnce(&EntryTable) -> R) -> Option<R> {
         let tbl_guard = self.inner.table.read().unwrap();
-        match (idx_guard.as_ref(), tbl_guard.as_ref()) {
-            (Some(idx), Some(tbl)) => Some(f(idx, tbl)),
-            _ => None,
-        }
+        tbl_guard.as_ref().map(|tbl| f(tbl))
     }
 
     /// Spawn the background load of the embedded syntax data. Safe to call
@@ -295,14 +309,12 @@ impl AppState {
         self.install(entries);
     }
 
-    /// Compile entries into the index/table and mark the server ready.
+    /// Build the entry table and mark the server ready.
     pub fn install(&self, entries: Vec<SyntaxEntry>) {
-        let index = SyntaxIndex::build(&entries);
         let table = EntryTable::from_entries(entries);
-        *self.inner.index.write().unwrap() = Some(Arc::new(index));
         *self.inner.table.write().unwrap() = Some(Arc::new(table));
         self.inner.ready.store(true, Ordering::Release);
-        tracing::info!("syntax index installed; server is ready");
+        tracing::info!("syntax entry table installed; server is ready");
     }
 
     // --- java-port engine -------------------------------------------------
@@ -341,6 +353,7 @@ impl AppState {
         match *state {
             JavaState::Idle => {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                let (htx, hrx) = tokio::sync::mpsc::unbounded_channel();
                 {
                     // Lock order is always java_state → java_requests; no
                     // other path nests these two locks.
@@ -350,6 +363,12 @@ impl AppState {
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *requests = Some(tx);
+                    let mut hover_requests = self
+                        .inner
+                        .java_hover_requests
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *hover_requests = Some(htx);
                 }
                 *state = JavaState::Building;
                 // Release the state lock before spawning so the new thread
@@ -369,7 +388,7 @@ impl AppState {
                         // the request channel) instead of hanging.
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                                java_engine_thread_main(engine_state, rx);
+                                java_engine_thread_main(engine_state, rx, hrx);
                             }));
                         if outcome.is_err() {
                             tracing::error!(
@@ -474,6 +493,44 @@ impl AppState {
         }
     }
 
+    /// Match a line against the pattern engine for hover purposes.
+    ///
+    /// Sends the line to the engine thread, which matches it against all
+    /// compiled patterns and returns the best-matching entry index + span.
+    /// Returns `None` when the engine is unavailable or no pattern matches.
+    /// The caller resolves the entry index to a `SyntaxEntry` via
+    /// `with_index` / `EntryTable::get`.
+    pub async fn java_hover(
+        &self,
+        line: String,
+        cursor: Option<usize>,
+    ) -> Option<(u32, (usize, usize))> {
+        if !self.start_java_engine() {
+            return None;
+        }
+        let sender = {
+            let guard = self
+                .inner
+                .java_hover_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.clone()
+        };
+        let sender = sender?;
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        sender
+            .send(JavaHoverRequest {
+                line,
+                cursor,
+                reply: reply_tx,
+            })
+            .ok()?;
+        match reply_rx.await {
+            Ok(JavaHoverReply::Match { entry_id, span }) => Some((entry_id, span)),
+            Ok(JavaHoverReply::None) | Err(_) => None,
+        }
+    }
+
     fn set_java_engine_ready(&self, stats: JavaEngineStats) {
         let mut guard = self
             .inner
@@ -502,6 +559,7 @@ impl AppState {
 fn java_engine_thread_main(
     state: AppState,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<JavaCheckRequest>,
+    mut hrx: tokio::sync::mpsc::UnboundedReceiver<JavaHoverRequest>,
 ) {
     // skript-patterns matching consults a thread-local type resolver; this
     // is the only thread that compiles or matches patterns, so install the
@@ -547,28 +605,52 @@ fn java_engine_thread_main(
         }
     };
 
-    // Serve check requests until the channel closes (server shutdown).
-    // A panic inside `check_document` unwinds out of this loop and is
-    // contained by the catch_unwind at the spawn site: the channel (and
-    // with it any queued oneshot senders) drops, so awaiting callers see an
-    // error and fall back to core diagnostics.
-    while let Some(request) = rx.blocking_recv() {
-        let reply = match registry.as_ref() {
-            Some(reg) => {
-                // Defensive re-install (idempotent): matching must find the
-                // resolver on this thread.
-                skript_patterns::set_type_resolver(Rc::new(skript_patterns::PermissiveResolver));
-                JavaCheckReply::Diagnostics(skript_checks::check_document(
-                    &request.text,
-                    reg,
-                    &request.config,
-                ))
-            }
-            None => JavaCheckReply::Unavailable,
-        };
-        if request.reply.send(reply).is_err() {
-            // Caller went away; keep serving.
+    // Serve check + hover requests until both channels close (server
+    // shutdown). A panic inside `check_document` or `match_line_for_hover`
+    // unwinds out of the loop and is contained by the catch_unwind at the
+    // spawn site: both channels (and their oneshot senders) drop, so
+    // awaiting callers see an error and fall back gracefully.
+    loop {
+        // Try check requests first (higher priority — diagnostics).
+        if let Some(request) = rx.blocking_recv() {
+            let reply = match registry.as_ref() {
+                Some(reg) => {
+                    skript_patterns::set_type_resolver(Rc::new(
+                        skript_patterns::PermissiveResolver,
+                    ));
+                    JavaCheckReply::Diagnostics(skript_checks::check_document(
+                        &request.text,
+                        reg,
+                        &request.config,
+                    ))
+                }
+                None => JavaCheckReply::Unavailable,
+            };
+            let _ = request.reply.send(reply);
+            continue;
         }
+        // Then hover requests.
+        if let Some(request) = hrx.blocking_recv() {
+            let reply = match registry.as_ref() {
+                Some(reg) => {
+                    skript_patterns::set_type_resolver(Rc::new(
+                        skript_patterns::PermissiveResolver,
+                    ));
+                    match skript_checks::match_line_for_hover(&request.line, request.cursor, reg) {
+                        Some(m) => JavaHoverReply::Match {
+                            entry_id: m.entry_id,
+                            span: m.span,
+                        },
+                        None => JavaHoverReply::None,
+                    }
+                }
+                None => JavaHoverReply::None,
+            };
+            let _ = request.reply.send(reply);
+            continue;
+        }
+        // Both channels closed — shutdown.
+        break;
     }
 }
 
@@ -603,11 +685,11 @@ mod tests {
     fn install_makes_state_ready_and_queryable() {
         let state = AppState::new(EffectiveConfig::default());
         assert!(!state.ready());
-        assert!(state.with_index(|_, _| ()).is_none());
+        assert!(state.with_index(|_| ()).is_none());
 
         state.install(sample_entries());
         assert!(state.ready());
-        let count = state.with_index(|_idx, tbl| tbl.len()).unwrap();
+        let count = state.with_index(|tbl| tbl.len()).unwrap();
         assert_eq!(count, 1);
     }
 

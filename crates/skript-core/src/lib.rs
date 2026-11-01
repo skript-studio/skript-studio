@@ -16,7 +16,6 @@ pub mod hover;
 pub mod lexer;
 pub mod matching;
 pub mod parser;
-pub mod pattern;
 pub mod references;
 pub mod semantic;
 pub mod syntax;

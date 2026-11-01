@@ -19,3 +19,8 @@ tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 thiserror = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+
+[dev-dependencies]
+skript-patterns = { path = "../skript-patterns" }
+skript-registry = { path = "../skript-registry" }
+skript-checks = { path = "../skript-checks" }

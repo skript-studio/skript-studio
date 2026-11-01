@@ -1,20 +1,15 @@
 //! Diagnostics generation.
 //!
-//! Turn a parsed Skript document + a [`SyntaxIndex`] into a list of
-//! [`Diagnostic`]s. The LSP layer maps these onto `tower-lsp` types; this
-//! module stays free of LSP types so it is unit-testable on its own.
+//! Turn a parsed Skript document into a list of [`Diagnostic`]s. The LSP
+//! layer maps these onto `tower-lsp` types; this module stays free of LSP
+//! types so it is unit-testable on its own.
 //!
-//! Diagnostic rules (see the design doc):
-//!   * Skip blank lines, comments, section headers, variable assignments.
-//!   * Warn on lines that match no known pattern.
-//!   * Warn when a matched entry is marked removed.
-//!   * Warn when a matched entry requires an external plugin.
-//!   * Warn on type mismatches among captured arguments.
+//! Diagnostic rules:
+//!   * Parse errors → Error
+//!   * Semantic errors (unused variables, type mismatches) → Warning
 
-use crate::matching::{EntryTable, SyntaxIndex};
 use crate::parser::{parse_program, ParseResult};
 use crate::semantic::{analyze, SemanticAnalysis};
-use crate::SyntaxEntry;
 
 /// Severity of a diagnostic. Mirrors LSP's `DiagnosticSeverity` ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,19 +109,6 @@ pub fn validate_program(source: &str) -> Vec<Diagnostic> {
     let parse_result = parse_program(source);
     let analysis = analyze(&parse_result.program);
     validate_analysis(&parse_result, &analysis, source)
-}
-
-/// Convenience helper used by hover/completion tests: returns the first entry
-/// that matches the line, if any.
-pub fn first_match<'a>(
-    line: &str,
-    index: &SyntaxIndex,
-    table: &'a EntryTable,
-) -> Option<&'a SyntaxEntry> {
-    index
-        .matches(line)
-        .into_iter()
-        .find_map(|m| table.get(m.entry_id))
 }
 
 #[cfg(test)]

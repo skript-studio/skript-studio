@@ -270,6 +270,85 @@ struct MatchedEntry {
     pattern_index: usize,
 }
 
+/// Result of matching a line for hover purposes.
+#[derive(Debug, Clone)]
+pub struct HoverMatch {
+    /// The registry entry index of the best-matching syntax.
+    pub entry_index: usize,
+    /// The `SyntaxEntry::id` of the best-matching syntax (for EntryTable lookup).
+    pub entry_id: u32,
+    /// Byte span of the match within the line (0-based, half-open).
+    pub span: (usize, usize),
+}
+
+/// Match a line against all compiled patterns in the registry, returning
+/// the best match for hover purposes.
+///
+/// Unlike `collect_matches` (which is for diagnostics and filters by
+/// candidate syntax types), this searches ALL syntax types and returns
+/// the single best match — the one whose span most tightly covers the
+/// cursor position, or if no position is given, the first match.
+///
+/// The caller is responsible for installing a `TypeResolver` (usually
+/// `PermissiveResolver`) on the calling thread before calling this.
+pub fn match_line_for_hover(
+    line: &str,
+    cursor: Option<usize>,
+    registry: &Registry,
+) -> Option<HoverMatch> {
+    let all_types = [
+        SyntaxType::Effect,
+        SyntaxType::Condition,
+        SyntaxType::Expression,
+        SyntaxType::Event,
+        SyntaxType::Section,
+        SyntaxType::Structure,
+        SyntaxType::Type,
+        SyntaxType::Function,
+    ];
+    let mut best: Option<HoverMatch> = None;
+    for ty in &all_types {
+        for &entry_index in registry.indices_for_type(ty) {
+            for compiled in registry.compiled_for_entry(entry_index) {
+                if compiled.pattern.is_catch_all() {
+                    continue;
+                }
+                if compiled
+                    .pattern
+                    .match_(line, ParseFlags::ALL, ParseContext::Default)
+                    .is_some()
+                {
+                    let span = (0, line.len()); // full-line span for hover
+                    let entry_id = registry.entries()[entry_index].id as u32;
+                    let candidate = HoverMatch {
+                        entry_index,
+                        entry_id,
+                        span,
+                    };
+                    // If we have a cursor, prefer matches whose span contains
+                    // it. Without a cursor, take the first match.
+                    match &best {
+                        None => best = Some(candidate),
+                        Some(existing) => {
+                            if let Some(c) = cursor {
+                                let existing_contains =
+                                    c >= existing.span.0 && c <= existing.span.1;
+                                let candidate_contains =
+                                    c >= candidate.span.0 && c <= candidate.span.1;
+                                if candidate_contains && !existing_contains {
+                                    best = Some(candidate);
+                                }
+                            }
+                        }
+                    }
+                    break; // first pattern per entry is enough
+                }
+            }
+        }
+    }
+    best
+}
+
 /// Try every compiled pattern of entries whose syntax type is in
 /// `candidates` against `stripped`. One matching pattern per entry is
 /// enough for the rules, so only the first hit per entry is recorded.
