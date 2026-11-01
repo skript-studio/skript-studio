@@ -9,9 +9,20 @@
 //! implement (completion, hover, diagnostics push, semanticTokens/full,
 //! document symbols, folding, go-to-definition, references, signature help,
 //! inlay hints).
+//!
+//! # Diagnostics engine selection (Agent 10)
+//!
+//! With the default `engine = "core"` init option, diagnostics come from
+//! the skript-core AST validator exactly as before. With
+//! `engine = "java-port"`, diagnostics are produced by the faithful
+//! Java-port checker (`skript-checks` over `skript-registry` +
+//! `skript-patterns`, running on its dedicated engine thread — see
+//! [`crate::state`]) and *replace* the skript-core ones; if that engine is
+//! unavailable, we fall back to the historical path. All other features
+//! (completion, hover, …) always stay on skript-core.
 
 use crate::folding;
-use crate::options::{InitOptions, SkriptRcToml};
+use crate::options::{EffectiveConfig, Engine, InitOptions, SkriptRcToml};
 use crate::state::AppState;
 use serde_json::Value;
 use skript_core::ast::Visitor;
@@ -94,6 +105,15 @@ impl Backend {
         if let Some(max) = opts.max_completions {
             cfg.max_completions = max;
         }
+        if let Some(engine) = opts.engine {
+            cfg.engine = engine;
+        }
+        if let Some(addons) = opts.enabled_addons {
+            cfg.enabled_addons = addons;
+        }
+        if let Some(plugins) = opts.installed_plugins {
+            cfg.installed_plugins = plugins;
+        }
         self.state.set_config(cfg);
     }
 
@@ -115,28 +135,32 @@ impl Backend {
             return;
         };
 
-        // AST-based validation from cached snapshot
-        let diags = self
-            .state
-            .with_snapshot(uri, |snap| {
-                validation::validate_analysis(&snap.parse_result, &snap.analysis, &text)
-            })
-            .unwrap_or_else(|| validation::validate_program(&text));
+        let config = self.state.config();
 
-        let lsp_diags: Vec<Diagnostic> = diags
-            .into_iter()
-            .map(|d| Diagnostic {
-                range: Range::new(
-                    Position::new(d.line, d.start_col),
-                    Position::new(d.line, d.end_col),
-                ),
-                severity: Some(severity_to_lsp(d.severity)),
-                source: Some(d.source),
-                code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code)),
-                message: d.message,
-                ..Default::default()
-            })
-            .collect();
+        let lsp_diags: Vec<Diagnostic> = if config.engine == Engine::JavaPort {
+            // Java-port engine: diagnostics come from skript-checks (on the
+            // dedicated engine thread) and REPLACE the skript-core ones.
+            // Requests queue while the engine is still building; if it is
+            // unavailable, fall back to the historical core path.
+            let reply = self
+                .state
+                .java_check(text.clone(), build_check_config(&config))
+                .await;
+            match reply {
+                Some(line_diags) => {
+                    line_diags.into_iter().map(line_diagnostic_to_lsp).collect()
+                }
+                None => {
+                    tracing::warn!(
+                        uri = %uri,
+                        "java-port engine unavailable; falling back to core diagnostics"
+                    );
+                    core_lsp_diagnostics(&self.state, uri, &text)
+                }
+            }
+        } else {
+            core_lsp_diagnostics(&self.state, uri, &text)
+        };
 
         let parsed = uri.parse::<tower_lsp::lsp_types::Url>().ok();
         let parsed = match parsed {
@@ -158,6 +182,71 @@ fn severity_to_lsp(s: Severity) -> DiagnosticSeverity {
         Severity::Warning => DiagnosticSeverity::WARNING,
         Severity::Information => DiagnosticSeverity::INFORMATION,
         Severity::Hint => DiagnosticSeverity::HINT,
+    }
+}
+
+/// skript-core AST validation mapped to LSP diagnostics — the historical
+/// `engine = "core"` path (moved verbatim out of `publish_diagnostics`).
+fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnostic> {
+    // AST-based validation from cached snapshot
+    let diags = state
+        .with_snapshot(uri, |snap| {
+            validation::validate_analysis(&snap.parse_result, &snap.analysis, text)
+        })
+        .unwrap_or_else(|| validation::validate_program(text));
+
+    diags
+        .into_iter()
+        .map(|d| Diagnostic {
+            range: Range::new(
+                Position::new(d.line, d.start_col),
+                Position::new(d.line, d.end_col),
+            ),
+            severity: Some(severity_to_lsp(d.severity)),
+            source: Some(d.source),
+            code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code)),
+            message: d.message,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Build the `skript-checks` configuration from the effective config.
+///
+/// `skript_version` / `minecraft_version` stay `None` for now — there is no
+/// client-facing option for them yet.
+pub fn build_check_config(config: &EffectiveConfig) -> skript_checks::CheckConfig {
+    skript_checks::CheckConfig {
+        enabled_addons: config.enabled_addons.iter().cloned().collect(),
+        installed_plugins: config.installed_plugins.iter().cloned().collect(),
+        skript_version: None,
+        minecraft_version: None,
+    }
+}
+
+/// Map a `skript-checks` `LineDiagnostic` to an LSP `Diagnostic`.
+///
+/// Severity: Error→1, Warning→2, Info→3. `LineDiagnostic` line/column
+/// fields are 0-based **character** counts (Unicode scalar values) while LSP
+/// positions are UTF-16 code units; the two coincide for all BMP characters,
+/// which covers the Skript corpus and typical scripts. This mirrors the
+/// approximation already used by the core path (see
+/// `char_index_for_column`).
+pub fn line_diagnostic_to_lsp(d: skript_checks::LineDiagnostic) -> Diagnostic {
+    Diagnostic {
+        range: Range::new(
+            Position::new(d.line as u32, d.col_start as u32),
+            Position::new(d.line as u32, d.col_end as u32),
+        ),
+        severity: Some(match d.severity {
+            skript_checks::Severity::Error => DiagnosticSeverity::ERROR,
+            skript_checks::Severity::Warning => DiagnosticSeverity::WARNING,
+            skript_checks::Severity::Info => DiagnosticSeverity::INFORMATION,
+        }),
+        source: Some("skript".to_owned()),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code.to_owned())),
+        message: d.message,
+        ..Default::default()
     }
 }
 
@@ -201,6 +290,47 @@ impl LanguageServer for Backend {
 
         // 2. Apply initializationOptions (highest precedence).
         self.apply_init_options(&params);
+
+        // 3. If the java-port engine was selected, build it now — off the
+        //    request thread (compiling ~13.7k patterns takes a moment) —
+        //    and report the outcome to the client at startup.
+        if self.state.config().engine == Engine::JavaPort {
+            let state = self.state.clone();
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let build_state = state.clone();
+                let failures = tokio::task::spawn_blocking(move || {
+                    build_state.ensure_java_engine()
+                })
+                .await
+                .unwrap_or(usize::MAX);
+                if failures == usize::MAX {
+                    client
+                        .log_message(
+                            tower_lsp::lsp_types::MessageType::ERROR,
+                            "skript-lsp: java-port engine unavailable \
+                             (embedded corpus failed to load, or the pattern \
+                             compiler panicked)"
+                                .to_owned(),
+                        )
+                        .await;
+                    return;
+                }
+                let patterns = state
+                    .java_engine_stats()
+                    .map(|s| s.patterns_compiled)
+                    .unwrap_or(0);
+                client
+                    .log_message(
+                        tower_lsp::lsp_types::MessageType::INFO,
+                        format!(
+                            "skript-lsp: java-port engine enabled \
+                             ({patterns} patterns, {failures} compile failures)"
+                        ),
+                    )
+                    .await;
+            });
+        }
 
         let capabilities = ServerCapabilities {
             text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),

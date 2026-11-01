@@ -12,6 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 skript-core = { path = "../skript-core", default-features = false }
+# Java-faithful pattern engine port (branch: port/java-pattern-engine).
+# Wired in behind the `engine = "java-port"` init option; the default
+# (`core`) path only uses skript-core, as before.
+skript-patterns = { path = "../skript-patterns" }
+skript-registry = { path = "../skript-registry" }
+skript-checks = { path = "../skript-checks" }
 tower-lsp = { workspace = true }
 dashmap = { workspace = true }
 tokio = { workspace = true }

@@ -78,6 +78,25 @@ impl SkriptPattern {
         }
     }
 
+    /// The keyword prefilter (Java `SkriptPattern.keywords`).
+    ///
+    /// Patterns with NO keywords have no required literal text — every
+    /// non-type element is optional, a regex, or a tag — so they can match
+    /// almost any input (e.g. `<.+>`, `%booleans%`, `[on] [all] %javatype%`).
+    /// Downstream consumers that need discriminative line matching
+    /// (diagnostics) treat these as catch-alls and skip them; see
+    /// `skript-checks`. This mirrors the `is_bare_type` heuristic the
+    /// skript-core regex approximation uses for the same reason.
+    pub fn keywords(&self) -> &[Keyword] {
+        &self.keywords
+    }
+
+    /// Whether this pattern has no required literal text (no keywords) and
+    /// can therefore match nearly any input. See [`SkriptPattern::keywords`].
+    pub fn is_catch_all(&self) -> bool {
+        self.keywords.is_empty()
+    }
+
     /// Port of `SkriptPattern.match(String, int, ParseContext)`:
     /// lowercase prefilter (every keyword `isPresent`), min-length check,
     /// `trim()`, fresh `MatchResult` sized to `expression_amount`, then

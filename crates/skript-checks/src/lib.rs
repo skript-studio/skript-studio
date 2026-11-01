@@ -283,6 +283,15 @@ fn collect_matches(
     for ty in candidates {
         for &entry_index in registry.indices_for_type(ty) {
             for compiled in registry.compiled_for_entry(entry_index) {
+                // Catch-all patterns (no keyword prefilter — no required
+                // literal text, e.g. `<.+>`, `%booleans%`, `[on] %javatype%`)
+                // match nearly any input and carry no discriminative value
+                // for line-level diagnostics. Skipping them is what makes
+                // the `unparseable` rule reachable on the full corpus; the
+                // same insight exists in skript-core as `is_bare_type`.
+                if compiled.pattern.is_catch_all() {
+                    continue;
+                }
                 if compiled
                     .pattern
                     .match_(stripped, ParseFlags::ALL, ParseContext::Default)
@@ -1071,11 +1080,17 @@ mod tests {
         set_type_resolver(Rc::new(PermissiveResolver));
         let mut reg = Registry::embedded().expect("embedded corpus must load");
         let failures = reg.compile_all();
-        assert!(
-            failures.is_empty(),
-            "expected zero compile failures, got {}: {failures:?}",
+        // 17 genuinely-malformed patterns live in the SkriptHub dump (see
+        // registry's `compile_all_embedded_expects_known_failures`); the
+        // backslash-restore fallback repairs 15 more. Both counts are
+        // pinned here so a corpus update that changes them is noticed.
+        assert_eq!(
+            failures.len(),
+            17,
+            "expected 17 known-malformed corpus patterns, got {}: {failures:?}",
             failures.len()
         );
+        assert_eq!(reg.repaired().len(), 15);
 
         let mut cfg = CheckConfig::default();
         cfg.enabled_addons = addons(&["Skript", "skUtilities"]);
@@ -1095,20 +1110,22 @@ mod tests {
         for pair in ds.windows(2) {
             assert!(pair[0].line < pair[1].line, "duplicate line: {ds:?}");
         }
-        // Lines 0/1 skipped; every content line (2..=6) gets exactly one.
-        assert_eq!(ds.len(), 5, "{ds:?}");
+        // Lines 0/1 skipped. Since the catch-all filter landed, `on join:`
+        // matches ONLY Skript's event (skript-mirror's/reflect's catch-all
+        // event patterns no longer produce spurious ambiguity), so line 2
+        // is now clean and lines 3..=6 carry the four rules.
+        assert_eq!(ds.len(), 4, "{ds:?}");
         let line_code: Vec<(usize, &str)> = ds.iter().map(|d| (d.line, d.code)).collect();
         assert_eq!(
             line_code,
             vec![
-                (2, "ambiguous-addon"),   // on join: Skript + skript-mirror + skript-reflect events
                 (3, "ambiguous-addon"),   // broadcast: Skript + skript-reflect + Hippo + ...
-                (4, "addon-not-enabled"), // destroy event-train: only traincarts/catch-alls match
+                (4, "addon-not-enabled"), // destroy event-train: only traincarts/non-catch-alls match
                 (5, "plugin-missing"),    // restart server: skUtilities requires Spigot
-                (6, "ambiguous-addon"),   // if player is op: Skript Is Op + Conditionals + SkJade
+                (6, "ambiguous-addon"),   // if player is op: Skript Is Op + Conquer (catch-alls filtered)
             ]
         );
-        assert!(ds[2].message.contains("skript-traincarts"), "{}", ds[2].message);
-        assert!(ds[3].message.contains("Restart Server"), "{}", ds[3].message);
+        assert!(ds[1].message.contains("skript-traincarts"), "{}", ds[1].message);
+        assert!(ds[2].message.contains("Restart Server"), "{}", ds[2].message);
     }
 }

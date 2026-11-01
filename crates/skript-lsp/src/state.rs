@@ -8,6 +8,18 @@
 //! Readiness model: every feature (diagnostics, completions, hover) checks
 //! [`AppState::ready`] and degrades gracefully — returning empty results —
 //! until the cache is loaded.
+//!
+//! # Java-port engine (Agent 10)
+//!
+//! The faithful Java-port pattern engine (`skript-registry` +
+//! `skript-patterns`) is owned by **one dedicated OS thread** (see
+//! [`AppState::start_java_engine`]). This is forced by the frozen
+//! `skript-patterns` API: pattern elements are `Rc<RefCell<…>>`-based
+//! (`!Send`), so the compiled `Registry` can never be shared with async
+//! tasks — it is built, matched against, and dropped entirely on that
+//! thread. The rest of the server only ever sees `Send` handles: the
+//! request channel ([`AppState::java_check`]) and plain data
+//! (`skript_checks::LineDiagnostic`s).
 
 use crate::options::EffectiveConfig;
 use include_dir::{include_dir, Dir};
@@ -17,8 +29,9 @@ use skript_core::parser::ParseResult;
 use skript_core::semantic::{analyze, SemanticAnalysis};
 use skript_core::parse_program;
 use skript_core::SyntaxEntry;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Condvar, Mutex as SyncMutex, RwLock};
 use tokio::sync::Mutex;
 
 /// The cached result of parsing and analyzing a document.
@@ -65,6 +78,54 @@ struct Inner {
     config: RwLock<EffectiveConfig>,
     /// Serializes refresh attempts.
     refresh_lock: Mutex<()>,
+    /// Java-port engine lifecycle + stats. `java_state_cv` is signalled
+    /// whenever the state transitions to `Ready` or `Broken` (so
+    /// [`AppState::ensure_java_engine`] waiters wake up).
+    java_state: SyncMutex<JavaState>,
+    java_state_cv: Condvar,
+    /// Request channel to the java engine thread; `None` until the engine
+    /// is started (always set while holding the `java_state` lock).
+    java_requests: SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<JavaCheckRequest>>>,
+}
+
+/// Lifecycle + stats of the java engine thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JavaState {
+    /// Not started yet.
+    Idle,
+    /// Thread spawned; the registry is still compiling.
+    Building,
+    /// Registry compiled and serving requests.
+    Ready(JavaEngineStats),
+    /// Permanently unavailable (corpus load failure or a panic — e.g. a
+    /// `todo!()` stub while the engine port is still landing).
+    Broken,
+}
+
+/// What the java engine thread built. Mirrored out of the (single-owner,
+/// `!Send`) registry so the rest of the server can report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JavaEngineStats {
+    /// Registry entries loaded from the embedded corpus.
+    pub entries: usize,
+    /// Split patterns that compiled successfully.
+    pub patterns_compiled: usize,
+    /// Split patterns that failed to compile.
+    pub compile_failures: usize,
+}
+
+/// One document check sent to the java engine thread.
+struct JavaCheckRequest {
+    text: String,
+    config: skript_checks::CheckConfig,
+    reply: tokio::sync::oneshot::Sender<JavaCheckReply>,
+}
+
+/// Answer from the java engine thread. Plain data only (`Send`).
+enum JavaCheckReply {
+    Diagnostics(Vec<skript_checks::LineDiagnostic>),
+    /// The engine could not produce diagnostics (broken / unavailable).
+    Unavailable,
 }
 
 const CACHE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/data/skripthub");
@@ -101,6 +162,9 @@ impl AppState {
                 docs: dashmap::DashMap::new(),
                 config: RwLock::new(config),
                 refresh_lock: Mutex::new(()),
+                java_state: SyncMutex::new(JavaState::Idle),
+                java_state_cv: Condvar::new(),
+                java_requests: SyncMutex::new(None),
             }),
         }
     }
@@ -224,6 +288,275 @@ impl AppState {
         self.inner.ready.store(true, Ordering::Release);
         tracing::info!("syntax index installed; server is ready");
     }
+
+    // --- java-port engine -------------------------------------------------
+
+    /// Stats of the built java engine; `None` until it is `Ready`.
+    pub fn java_engine_stats(&self) -> Option<JavaEngineStats> {
+        let guard = self
+            .inner
+            .java_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match *guard {
+            JavaState::Ready(stats) => Some(stats),
+            _ => None,
+        }
+    }
+
+    /// Start building the java engine on its dedicated thread.
+    ///
+    /// Idempotent and non-blocking. Returns `true` when the engine is being
+    /// built (or is already ready), `false` when it is permanently
+    /// unavailable.
+    ///
+    /// Why a dedicated thread: `skript-patterns` elements are
+    /// `Rc<RefCell<…>>`-based (frozen API), so the compiled `Registry` is
+    /// `!Send` and can never be stored in this (async-shared) state or moved
+    /// into `spawn_blocking` closures. The registry is built, matched
+    /// against, and dropped entirely on this one thread; everything that
+    /// crosses back to the async side is plain `Send` data.
+    pub fn start_java_engine(&self) -> bool {
+        let mut state = self
+            .inner
+            .java_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match *state {
+            JavaState::Idle => {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                {
+                    // Lock order is always java_state → java_requests; no
+                    // other path nests these two locks.
+                    let mut requests = self
+                        .inner
+                        .java_requests
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *requests = Some(tx);
+                }
+                *state = JavaState::Building;
+                // Release the state lock before spawning so the new thread
+                // can immediately take it to report Ready/Broken.
+                drop(state);
+
+                let spawn_state = self.clone();
+                let spawn_result = std::thread::Builder::new()
+                    .name("skript-java-engine".to_owned())
+                    .spawn(move || {
+                        let engine_state = spawn_state.clone();
+                        // The whole engine body is panic-contained: a panic
+                        // (e.g. a `todo!()` stub while the port lands) must
+                        // mark the engine Broken so `ensure_java_engine`
+                        // waiters wake up and parked `java_check` replies
+                        // resolve (their oneshot senders drop together with
+                        // the request channel) instead of hanging.
+                        let outcome = std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(move || {
+                                java_engine_thread_main(engine_state, rx);
+                            }),
+                        );
+                        if outcome.is_err() {
+                            tracing::error!(
+                                "java engine thread panicked; \
+                                 the java-port engine is disabled for this session"
+                            );
+                            spawn_state.set_java_engine_broken();
+                        }
+                    });
+                match spawn_result {
+                    Ok(_handle) => true,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to spawn the java engine thread");
+                        // The closure (and with it the channel receiver) was
+                        // dropped by the failed spawn, so sends on the stored
+                        // sender now fail and callers fall back. Wake any
+                        // waiters:
+                        self.set_java_engine_broken();
+                        false
+                    }
+                }
+            }
+            JavaState::Building | JavaState::Ready(_) => true,
+            JavaState::Broken => false,
+        }
+    }
+
+    /// Build the java engine and block until it is ready.
+    ///
+    /// Starts the dedicated engine thread if needed, then waits for it to
+    /// finish compiling the embedded corpus. Returns the number of compile
+    /// failures (`0` when every pattern compiled). Returns `usize::MAX`
+    /// when the engine is permanently unavailable (corpus load failure or
+    /// a panicking compile).
+    ///
+    /// Only call this from a blocking context (`spawn_blocking`, tests) —
+    /// never directly from an async handler. Subsequent calls neither
+    /// rebuild nor re-block (they return the stored failure count).
+    pub fn ensure_java_engine(&self) -> usize {
+        if !self.start_java_engine() {
+            return usize::MAX;
+        }
+        let mut guard = self
+            .inner
+            .java_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            match *guard {
+                JavaState::Ready(stats) => return stats.compile_failures,
+                JavaState::Broken => return usize::MAX,
+                // `Idle` is unreachable here (start_java_engine ran),
+                // `Building` means the engine thread is still compiling.
+                JavaState::Idle | JavaState::Building => {}
+            }
+            guard = self
+                .inner
+                .java_state_cv
+                .wait(guard)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    /// Run `skript_checks::check_document` for one document on the engine
+    /// thread.
+    ///
+    /// Returns `None` when the engine cannot produce diagnostics (not
+    /// startable, broken, or its thread died) — callers fall back to the
+    /// skript-core validator. Requests sent while the engine is still
+    /// building are queued and answered once it is ready, so the first
+    /// diagnostics after startup are correct rather than a flash of
+    /// core-engine output.
+    pub async fn java_check(
+        &self,
+        text: String,
+        config: skript_checks::CheckConfig,
+    ) -> Option<Vec<skript_checks::LineDiagnostic>> {
+        if !self.start_java_engine() {
+            return None;
+        }
+        let sender = {
+            let guard = self
+                .inner
+                .java_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.clone()
+        };
+        let sender = sender?;
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        sender
+            .send(JavaCheckRequest {
+                text,
+                config,
+                reply: reply_tx,
+            })
+            .ok()?;
+        match reply_rx.await {
+            Ok(JavaCheckReply::Diagnostics(diags)) => Some(diags),
+            // Unavailable, or the engine thread died before answering.
+            Ok(JavaCheckReply::Unavailable) | Err(_) => None,
+        }
+    }
+
+    fn set_java_engine_ready(&self, stats: JavaEngineStats) {
+        let mut guard = self
+            .inner
+            .java_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = JavaState::Ready(stats);
+        drop(guard);
+        self.inner.java_state_cv.notify_all();
+    }
+
+    fn set_java_engine_broken(&self) {
+        let mut guard = self
+            .inner
+            .java_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = JavaState::Broken;
+        drop(guard);
+        self.inner.java_state_cv.notify_all();
+    }
+}
+
+/// Body of the dedicated java engine thread. Exclusively owns the `!Send`
+/// compiled registry for the whole thread lifetime.
+fn java_engine_thread_main(
+    state: AppState,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<JavaCheckRequest>,
+) {
+    // skript-patterns matching consults a thread-local type resolver; this
+    // is the only thread that compiles or matches patterns, so install the
+    // permissive resolver HERE (idempotent and cheap; this function is
+    // fully synchronous, so the resolver is never held across an await).
+    skript_patterns::set_type_resolver(Rc::new(skript_patterns::PermissiveResolver));
+
+    let started = std::time::Instant::now();
+    let registry = match skript_registry::Registry::embedded() {
+        Ok(mut registry) => {
+            let failures = registry.compile_all();
+            let patterns_compiled: usize = (0..registry.entries().len())
+                .map(|i| registry.compiled_for_entry(i).len())
+                .sum();
+            tracing::info!(
+                entries = registry.entries().len(),
+                compiled = patterns_compiled,
+                failures = failures.len(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "java engine: embedded corpus compiled"
+            );
+            // First few failures at debug level for post-hoc inspection.
+            for failure in failures.iter().take(5) {
+                tracing::debug!(
+                    entry = failure.entry_index,
+                    pattern = failure.pattern_index,
+                    raw = %failure.raw,
+                    error = ?failure.error,
+                    "java engine: pattern compile failure"
+                );
+            }
+            state.set_java_engine_ready(JavaEngineStats {
+                entries: registry.entries().len(),
+                patterns_compiled,
+                compile_failures: failures.len(),
+            });
+            Some(registry)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "java engine: embedded corpus failed to load");
+            state.set_java_engine_broken();
+            None
+        }
+    };
+
+    // Serve check requests until the channel closes (server shutdown).
+    // A panic inside `check_document` unwinds out of this loop and is
+    // contained by the catch_unwind at the spawn site: the channel (and
+    // with it any queued oneshot senders) drops, so awaiting callers see an
+    // error and fall back to core diagnostics.
+    while let Some(request) = rx.blocking_recv() {
+        let reply = match registry.as_ref() {
+            Some(reg) => {
+                // Defensive re-install (idempotent): matching must find the
+                // resolver on this thread.
+                skript_patterns::set_type_resolver(
+                    Rc::new(skript_patterns::PermissiveResolver),
+                );
+                JavaCheckReply::Diagnostics(skript_checks::check_document(
+                    &request.text,
+                    reg,
+                    &request.config,
+                ))
+            }
+            None => JavaCheckReply::Unavailable,
+        };
+        if request.reply.send(reply).is_err() {
+            // Caller went away; keep serving.
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +642,25 @@ mod tests {
         let entries = load_addon_files(&TEST_CACHE, &["Skript".to_owned()]);
         assert!(!entries.is_empty(), "should have at least Skript entries");
         assert!(entries.iter().all(|e| e.addon.name == "Skript"));
+    }
+
+    // --- java-port engine wiring (Agent 10) -------------------------------
+
+    /// `AppState` is held across `.await`s by every tower-lsp handler, so it
+    /// must stay `Send + Sync`. This is exactly why the `!Send` java
+    /// `Registry` lives on its dedicated thread instead of inside `Inner`.
+    #[test]
+    fn app_state_remains_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AppState>();
+    }
+
+    #[test]
+    fn java_engine_idle_on_fresh_state() {
+        // A fresh state has no engine, and stats read `None`. (Do NOT start
+        // the engine here: with the pattern-compiler stubs still `todo!()`,
+        // starting would panic-build on the engine thread by design.)
+        let state = AppState::new(EffectiveConfig::default());
+        assert_eq!(state.java_engine_stats(), None);
     }
 }
