@@ -42,7 +42,7 @@ impl ParseTagPatternElement {
     /// DIVERGENCE: Java's `Integer.parseInt` accepts negative marks (e.g.
     /// `"-1"`); the frozen contract fixes `mark: usize`, so negative (and
     /// > `u64`-range) tags fall back to `0`. Real-world `¦` marks are
-    /// non-negative.
+    /// > non-negative.
     pub fn new_rc_tag(tag: impl Into<String>) -> ElementRef {
         let tag = tag.into();
         let mark = tag.parse::<usize>().unwrap_or(0);
@@ -113,7 +113,7 @@ impl PatternElement for ParseTagPatternElement {
     ///     ParseTagPatternElement(tag = literal.trim()) with
     ///     set_next(literal) and original_next = literal (the `:(a|b)` /
     ///     `:[a|b]` case).
-    /// Finally calls super.setNext(next).
+    ///     Finally calls super.setNext(next).
     fn set_next(&self, next: Option<ElementRef>) {
         // Java: if (tag != null && tag.isEmpty()) — only an EMPTY STRING tag
         // (not `None`, not a real tag) triggers the derivation.
@@ -143,13 +143,11 @@ impl PatternElement for ParseTagPatternElement {
                     // pattern element.
                     let inner: Option<ElementRef> = {
                         let borrowed = next_el.borrow();
-                        if let Some(group) =
-                            borrowed.as_any().downcast_ref::<GroupPatternElement>()
+                        if let Some(group) = borrowed.as_any().downcast_ref::<GroupPatternElement>()
                         {
                             Some(group.pattern_element())
-                        } else if let Some(optional) = borrowed
-                            .as_any()
-                            .downcast_ref::<OptionalPatternElement>()
+                        } else if let Some(optional) =
+                            borrowed.as_any().downcast_ref::<OptionalPatternElement>()
                         {
                             Some(optional.pattern_element())
                         } else {
@@ -175,18 +173,17 @@ impl PatternElement for ParseTagPatternElement {
                                 // statement boundaries before building the
                                 // replacement element.
                                 let el = elements[i].clone();
-                                let literal_text: Option<String> = {
-                                    let borrowed = el.borrow();
-                                    if borrowed.as_any().is::<LiteralPatternElement>() {
-                                        Some(
-                                            borrowed.to_string_pretty(
+                                let literal_text: Option<String> =
+                                    {
+                                        let borrowed = el.borrow();
+                                        if borrowed.as_any().is::<LiteralPatternElement>() {
+                                            Some(borrowed.to_string_pretty(
                                                 &StringificationProperties::DEFAULT,
-                                            ),
-                                        )
-                                    } else {
-                                        None
-                                    }
-                                };
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    };
                                 // Prevent a pattern such as :(a|b|) from being
                                 // turned into (a:a|b:b|:), instead (a:a|b:b|)
                                 // — empty literals are left alone.
@@ -194,8 +191,7 @@ impl PatternElement for ParseTagPatternElement {
                                     Some(text) if !text.is_empty() => text,
                                     _ => continue,
                                 };
-                                let new_tag =
-                                    ParseTagPatternElement::new_rc_tag(java_trim(text));
+                                let new_tag = ParseTagPatternElement::new_rc_tag(java_trim(text));
                                 // Java: newTag.setNext(patternElement); — the
                                 // override runs (a no-op for non-empty derived
                                 // tags; for whitespace-only literals it
@@ -312,7 +308,8 @@ mod tests {
         assert_eq!(result.tags, vec!["3".to_string()]);
         assert_eq!(result.mark, 3);
         assert_eq!(
-            tag.borrow().to_string_pretty(&StringificationProperties::DEFAULT),
+            tag.borrow()
+                .to_string_pretty(&StringificationProperties::DEFAULT),
             "3:"
         );
     }

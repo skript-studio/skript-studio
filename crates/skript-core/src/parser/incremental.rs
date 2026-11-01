@@ -180,7 +180,10 @@ mod tests {
         let old_result = parse_program(old_source);
         let incr_result = incremental_update(old_source, new_source, &old_result.program);
         let full_result = parse_program(new_source);
-        assert_eq!(incr_result.program.items.len(), full_result.program.items.len());
+        assert_eq!(
+            incr_result.program.items.len(),
+            full_result.program.items.len()
+        );
     }
 
     #[test]
@@ -204,8 +207,14 @@ mod tests {
     #[test]
     fn test_incremental_update_produces_same_result() {
         let cases = vec![
-            ("function a():\n\treturn", "function a():\n\treturn\n\tbroadcast \"x\""),
-            ("function a():\n\treturn\n\non join:\n\tbroadcast \"hi\"", "function a():\n\treturn\n\tbroadcast \"x\"\n\non join:\n\tbroadcast \"bye\""),
+            (
+                "function a():\n\treturn",
+                "function a():\n\treturn\n\tbroadcast \"x\"",
+            ),
+            (
+                "function a():\n\treturn\n\non join:\n\tbroadcast \"hi\"",
+                "function a():\n\treturn\n\tbroadcast \"x\"\n\non join:\n\tbroadcast \"bye\"",
+            ),
             ("", "function a():\n\treturn"),
             ("function a():\n\treturn", ""),
         ];

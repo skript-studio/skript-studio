@@ -31,9 +31,7 @@ impl OptionalPatternElement {
             let inner = {
                 let borrowed = child.borrow();
                 match borrowed.as_any().downcast_ref::<GroupPatternElement>() {
-                    Some(group) if group.next().is_none() => {
-                        Some(group.pattern_element.clone())
-                    }
+                    Some(group) if group.next().is_none() => Some(group.pattern_element.clone()),
                     _ => None,
                 }
             };

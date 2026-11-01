@@ -21,9 +21,20 @@ fn should_skip_simple(line: &str) -> bool {
     }
     // Skip structural keywords
     matches!(
-        trimmed.split_whitespace().next().unwrap_or("").to_ascii_lowercase().as_str(),
-        "on" | "command" | "function" | "options" | "aliases" | "variables"
-        | "using" | "trigger" | "example"
+        trimmed
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "on" | "command"
+            | "function"
+            | "options"
+            | "aliases"
+            | "variables"
+            | "using"
+            | "trigger"
+            | "example"
     )
 }
 
@@ -53,23 +64,22 @@ fn test_validate(lines: &[&str], index: &SyntaxIndex, _table: &EntryTable) -> Ve
 /// Load all SyntaxEntry from the per-addon cache directory.
 fn load_cache() -> Vec<skript_core::SyntaxEntry> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let cache_dir = std::path::Path::new(&manifest_dir)
-        .join("../skript-lsp/data/skripthub");
+    let cache_dir = std::path::Path::new(&manifest_dir).join("../skript-lsp/data/skripthub");
 
     let mut all_entries = Vec::new();
     for entry in std::fs::read_dir(&cache_dir).unwrap_or_else(|_| {
-        panic!("cache directory not found at {:?}; run download-cache script", cache_dir)
+        panic!(
+            "cache directory not found at {:?}; run download-cache script",
+            cache_dir
+        )
     }) {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "json") {
-            let bytes = std::fs::read(&path).unwrap_or_else(|e| {
-                panic!("failed to read {:?}: {}", path, e)
-            });
-            let entries: Vec<skript_core::SyntaxEntry> =
-                serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                    panic!("failed to parse {:?}: {}", path, e)
-                });
+        if path.extension().is_some_and(|e| e == "json") {
+            let bytes =
+                std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+            let entries: Vec<skript_core::SyntaxEntry> = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|e| panic!("failed to parse {:?}: {}", path, e));
             all_entries.extend(entries);
         }
     }
@@ -92,8 +102,7 @@ fn content_aware_no_false_positives() {
     let index = skript_core::matching::SyntaxIndex::build(&entries);
     let table = skript_core::matching::EntryTable::from_entries(entries);
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-fixtures/SKRIPT_CODE");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/SKRIPT_CODE");
 
     let mut unknown_syntax: Vec<String> = Vec::new();
 
@@ -119,21 +128,12 @@ fn content_aware_no_false_positives() {
 
         for d in &diags {
             if d.code == "unknown-syntax" {
-                let snippet = lines
-                    .get(d.line as usize)
-                    .copied()
-                    .unwrap_or("<EOF>");
+                let snippet = lines.get(d.line as usize).copied().unwrap_or("<EOF>");
                 let trimmed = snippet.trim();
                 if is_known_unknown(trimmed) {
                     continue;
                 }
-                unknown_syntax.push(format!(
-                    "{}:{}  {}  {:?}",
-                    rel,
-                    d.line + 1,
-                    d.code,
-                    snippet
-                ));
+                unknown_syntax.push(format!("{}:{}  {}  {:?}", rel, d.line + 1, d.code, snippet));
             }
         }
     });
@@ -158,7 +158,9 @@ fn is_known_unknown(trimmed: &str) -> bool {
     if let Some((before, _)) = lower.split_once('=') {
         let key = before.trim();
         if !key.is_empty()
-            && key.chars().all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '_')
+            && key
+                .chars()
+                .all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '_')
         {
             return true;
         }
@@ -171,7 +173,9 @@ fn is_known_unknown(trimmed: &str) -> bool {
         if !key.is_empty()
             && !key.contains('{')
             && !key.contains('%')
-            && key.chars().all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '_')
+            && key
+                .chars()
+                .all(|c| c.is_alphanumeric() || c.is_whitespace() || c == '_')
         {
             return true;
         }
@@ -185,62 +189,158 @@ fn is_known_unknown(trimmed: &str) -> bool {
 
     // ── Script reflection (experimental) ─────────────────────────────────
     // Various reflection get/set/enable/disable patterns.
-    if lower.starts_with("set {_script} ") { return true; }
-    if lower.starts_with("set {_config} ") { return true; }
-    if lower.starts_with("set {_node} ") { return true; }
-    if lower.starts_with("set {_my function} ") { return true; }
-    if lower.starts_with("set {_my_script} ") { return true; }
-    if lower.starts_with("set {_function} ") { return true; }
-    if lower.starts_with("set {_value} ") { return true; }
-    if lower.starts_with("set {_scripts::") { return true; }
-    if lower.starts_with("set {_result} ") { return true; }
-    if lower.starts_with("set {_gui} ") { return true; }
-    if lower.starts_with("set {_item} to an apple") { return true; } // set-property pattern
+    if lower.starts_with("set {_script} ") {
+        return true;
+    }
+    if lower.starts_with("set {_config} ") {
+        return true;
+    }
+    if lower.starts_with("set {_node} ") {
+        return true;
+    }
+    if lower.starts_with("set {_my function} ") {
+        return true;
+    }
+    if lower.starts_with("set {_my_script} ") {
+        return true;
+    }
+    if lower.starts_with("set {_function} ") {
+        return true;
+    }
+    if lower.starts_with("set {_value} ") {
+        return true;
+    }
+    if lower.starts_with("set {_scripts::") {
+        return true;
+    }
+    if lower.starts_with("set {_result} ") {
+        return true;
+    }
+    if lower.starts_with("set {_gui} ") {
+        return true;
+    }
+    if lower.starts_with("set {_item} to an apple") {
+        return true;
+    } // set-property pattern
 
     // Reflection script access
-    if trimmed.starts_with('{') && trimmed.ends_with(" exists") { return true; }
-    if trimmed.starts_with('{') && trimmed.contains(" does not exist") { return true; }
-    if trimmed.starts_with('{') && trimmed.contains(" does not contain ") { return true; }
-    if trimmed.contains("the name of {_") { return true; }
+    if trimmed.starts_with('{') && trimmed.ends_with(" exists") {
+        return true;
+    }
+    if trimmed.starts_with('{') && trimmed.contains(" does not exist") {
+        return true;
+    }
+    if trimmed.starts_with('{') && trimmed.contains(" does not contain ") {
+        return true;
+    }
+    if trimmed.contains("the name of {_") {
+        return true;
+    }
 
     // Reflection effects
-    if lower.starts_with("enable {") { return true; }
-    if lower.starts_with("disable {") { return true; }
-    if lower.starts_with("unload {") || lower.starts_with("load {") { return true; }
-    if lower.starts_with("reload {") { return true; }
-    if lower.starts_with("run {") { return true; }
-    if lower.starts_with("the result of {") { return true; }
+    if lower.starts_with("enable {") {
+        return true;
+    }
+    if lower.starts_with("disable {") {
+        return true;
+    }
+    if lower.starts_with("unload {") || lower.starts_with("load {") {
+        return true;
+    }
+    if lower.starts_with("reload {") {
+        return true;
+    }
+    if lower.starts_with("run {") {
+        return true;
+    }
+    if lower.starts_with("the result of {") {
+        return true;
+    }
 
     // Reflection expressions
-    if lower.starts_with("the name of loop-value") { return true; }
-    if lower.starts_with("the first element of nodes of") { return true; }
-    if lower.starts_with("the first node") { return true; }
-    if lower.starts_with("the boolean value at") { return true; }
-    if lower.starts_with("the number value of") { return true; }
-    if lower.starts_with("the text value of") { return true; }
-    if lower.starts_with("the player value of") { return true; }
-    if lower.starts_with("the node") { return true; }
-    if lower.starts_with("the current script") { return true; }
-    if lower.starts_with("the script named") || lower.starts_with("the scripts named") { return true; }
-    if lower.starts_with("all loaded scripts") { return true; }
-    if lower.starts_with("the scripts in folder") { return true; }
-    if lower.starts_with("the skript config") { return true; }
-    if lower.starts_with("the result of {") { return true; }
+    if lower.starts_with("the name of loop-value") {
+        return true;
+    }
+    if lower.starts_with("the first element of nodes of") {
+        return true;
+    }
+    if lower.starts_with("the first node") {
+        return true;
+    }
+    if lower.starts_with("the boolean value at") {
+        return true;
+    }
+    if lower.starts_with("the number value of") {
+        return true;
+    }
+    if lower.starts_with("the text value of") {
+        return true;
+    }
+    if lower.starts_with("the player value of") {
+        return true;
+    }
+    if lower.starts_with("the node") {
+        return true;
+    }
+    if lower.starts_with("the current script") {
+        return true;
+    }
+    if lower.starts_with("the script named") || lower.starts_with("the scripts named") {
+        return true;
+    }
+    if lower.starts_with("all loaded scripts") {
+        return true;
+    }
+    if lower.starts_with("the scripts in folder") {
+        return true;
+    }
+    if lower.starts_with("the skript config") {
+        return true;
+    }
+    if lower.starts_with("the result of {") {
+        return true;
+    }
 
     // ── Queue operations (experimental) ──────────────────────────────────
-    if lower.starts_with("set {queue}") { return true; }
-    if lower.starts_with("set {gifts}") { return true; }
-    if lower.starts_with("set {players}") { return true; }
-    if lower.starts_with("set {advert messages}") { return true; }
-    if lower.starts_with("set {my list::*} to dequeued") { return true; }
-    if lower == "the start of {queue} is \"hello\"" { return true; }
-    if lower == "the end of {queue} is \"world\"" { return true; }
-    if lower.starts_with("set the end of {queue}") { return true; }
-    if lower.starts_with("add ") && lower.contains(" to the start of ") { return true; }
-    if lower.starts_with("delete the end of {queue}") { return true; }
-    if lower.starts_with("the first element of {queue}") { return true; }
-    if lower.starts_with("the last element of {queue}") { return true; }
-    if lower.starts_with("the first 2 elements in {queue}") { return true; }
+    if lower.starts_with("set {queue}") {
+        return true;
+    }
+    if lower.starts_with("set {gifts}") {
+        return true;
+    }
+    if lower.starts_with("set {players}") {
+        return true;
+    }
+    if lower.starts_with("set {advert messages}") {
+        return true;
+    }
+    if lower.starts_with("set {my list::*} to dequeued") {
+        return true;
+    }
+    if lower == "the start of {queue} is \"hello\"" {
+        return true;
+    }
+    if lower == "the end of {queue} is \"world\"" {
+        return true;
+    }
+    if lower.starts_with("set the end of {queue}") {
+        return true;
+    }
+    if lower.starts_with("add ") && lower.contains(" to the start of ") {
+        return true;
+    }
+    if lower.starts_with("delete the end of {queue}") {
+        return true;
+    }
+    if lower.starts_with("the first element of {queue}") {
+        return true;
+    }
+    if lower.starts_with("the last element of {queue}") {
+        return true;
+    }
+    if lower.starts_with("the first 2 elements in {queue}") {
+        return true;
+    }
     if trimmed == "the start of {queue} is \"hello\""
         || trimmed == "the end of {queue} is \"world\""
         || trimmed == "{queue} is empty"
@@ -249,82 +349,154 @@ fn is_known_unknown(trimmed: &str) -> bool {
     }
 
     // ── Chest menu / inventory event lines ───────────────────────────────
-    if lower.starts_with("set {_chest} ") { return true; }
-    if lower.starts_with("set {_menu} ") { return true; }
-    if lower.starts_with("set slot ") { return true; }
-    if lower.starts_with("name of event-inventory") { return true; }
-    if lower.starts_with("index of event-slot") { return true; }
-    if lower.starts_with("if {my inventories::*} contains") { return true; }
-    if lower == "{my inventories::*} contains event-inventory" { return true; }
+    if lower.starts_with("set {_chest} ") {
+        return true;
+    }
+    if lower.starts_with("set {_menu} ") {
+        return true;
+    }
+    if lower.starts_with("set slot ") {
+        return true;
+    }
+    if lower.starts_with("name of event-inventory") {
+        return true;
+    }
+    if lower.starts_with("index of event-slot") {
+        return true;
+    }
+    if lower.starts_with("if {my inventories::*} contains") {
+        return true;
+    }
+    if lower == "{my inventories::*} contains event-inventory" {
+        return true;
+    }
 
     // ── Set-property patterns ────────────────────────────────────────────
-    if lower.starts_with("set the name of ") { return true; }
-    if lower.starts_with("set the item amount of ") { return true; }
+    if lower.starts_with("set the name of ") {
+        return true;
+    }
+    if lower.starts_with("set the item amount of ") {
+        return true;
+    }
 
     // ── Break / mine naturally ───────────────────────────────────────────
-    if lower.starts_with("break {") && lower.contains(" naturally") { return true; }
+    if lower.starts_with("break {") && lower.contains(" naturally") {
+        return true;
+    }
 
     // ── Send without "to player" ─────────────────────────────────────────
     // Valid: `send "hello"` (no recipient). Not in fallback (has `to %player%`).
-    if lower.starts_with("send \"") && !lower.contains(" to ") { return true; }
-    if lower.starts_with("send formatted \"") { return true; }
-    if lower.starts_with("set {_number} to a random") { return true; }
+    if lower.starts_with("send \"") && !lower.contains(" to ") {
+        return true;
+    }
+    if lower.starts_with("send formatted \"") {
+        return true;
+    }
+    if lower.starts_with("set {_number} to a random") {
+        return true;
+    }
 
     // ── Do-while lines ───────────────────────────────────────────────────
-    if lower.starts_with("do while ") { return true; }
+    if lower.starts_with("do while ") {
+        return true;
+    }
 
     // ── Complex give ─────────────────────────────────────────────────────
     // `give player {_item}` — no "to" keyword. Fallback: `give %item% to %player%`.
-    if lower.starts_with("give ") && !lower.contains(" to ") { return true; }
+    if lower.starts_with("give ") && !lower.contains(" to ") {
+        return true;
+    }
 
     // ── Complex delete ──────────────────────────────────────────────────
-    if lower.starts_with("delete {_value}") { return true; }
+    if lower.starts_with("delete {_value}") {
+        return true;
+    }
 
     // ── Function call expressions ────────────────────────────────────────
-    if lower.starts_with("say_message(") { return true; }
-    if lower.starts_with("set {_item} to give_apple(") { return true; }
-    if lower.starts_with("set {_found::*} to destroy_gold(") { return true; }
-    if lower.starts_with("set {_menu} to make_menu(") { return true; }
+    if lower.starts_with("say_message(") {
+        return true;
+    }
+    if lower.starts_with("set {_item} to give_apple(") {
+        return true;
+    }
+    if lower.starts_with("set {_found::*} to destroy_gold(") {
+        return true;
+    }
+    if lower.starts_with("set {_menu} to make_menu(") {
+        return true;
+    }
 
     // ── Random item expression ───────────────────────────────────────────
-    if lower.starts_with("give player random item out of ") { return true; }
+    if lower.starts_with("give player random item out of ") {
+        return true;
+    }
 
     // ── Text formatting clickable components ─────────────────────────────
-    if lower.starts_with("send \"") && lower.contains("[<link:") { return true; }
-    if lower.starts_with("send \"") && lower.contains("<cmd:") { return true; }
-    if lower.starts_with("send \"") && lower.contains("<sgt:") { return true; }
-    if lower.starts_with("send \"") && lower.contains("<insertion:") { return true; }
+    if lower.starts_with("send \"") && lower.contains("[<link:") {
+        return true;
+    }
+    if lower.starts_with("send \"") && lower.contains("<cmd:") {
+        return true;
+    }
+    if lower.starts_with("send \"") && lower.contains("<sgt:") {
+        return true;
+    }
+    if lower.starts_with("send \"") && lower.contains("<insertion:") {
+        return true;
+    }
 
     // ── Function definition patterns ─────────────────────────────────────
     // `function name(params:) :: returntype:` already handled as section header.
     // But inside functions, some lines won't match:
-    if lower.starts_with("add {_source} to {_found::*}") { return true; }
-    if lower.starts_with("add destroy_gold(") { return true; }
-    if lower.starts_with("{\"all\", \"banana\", \"and\", \"orange\"}") { return true; }
+    if lower.starts_with("add {_source} to {_found::*}") {
+        return true;
+    }
+    if lower.starts_with("add destroy_gold(") {
+        return true;
+    }
+    if lower.starts_with("{\"all\", \"banana\", \"and\", \"orange\"}") {
+        return true;
+    }
 
     // ── Miscellaneous allowlisted lines from timings, events, loops ──────
-    if lower.starts_with("at 18:00") { return true; }
-    if lower.starts_with("every 5") && lower.contains("minutes") { return true; }
-    if lower.starts_with("every 3") && lower.contains("minutes") { return true; }
+    if lower.starts_with("at 18:00") {
+        return true;
+    }
+    if lower.starts_with("every 5") && lower.contains("minutes") {
+        return true;
+    }
+    if lower.starts_with("every 3") && lower.contains("minutes") {
+        return true;
+    }
 
     // ── Loop with `loop-block` / `loop-item` references ──────────────────
-    if lower.starts_with("loop-block is a") { return true; }
-    if lower.starts_with("loop-block is a chest") { return true; }
-    if lower.starts_with("loop-block is a gold ore block") { return true; }
-    if lower == "loop-item is a dirt block" { return true; }
+    if lower.starts_with("loop-block is a") {
+        return true;
+    }
+    if lower.starts_with("loop-block is a chest") {
+        return true;
+    }
+    if lower.starts_with("loop-block is a gold ore block") {
+        return true;
+    }
+    if lower == "loop-item is a dirt block" {
+        return true;
+    }
 
     false
 }
 
 /// Recursively collect all `.sk` files under `dir` and call `f` for each.
 fn collect_sk_files(dir: &Path, buf: &mut Vec<fs::DirEntry>, f: &mut impl FnMut(&Path)) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
         if path.is_dir() {
             collect_sk_files(&path, buf, f);
-        } else if path.extension().map_or(false, |e| e == "sk") {
+        } else if path.extension().is_some_and(|e| e == "sk") {
             f(&path);
         }
     }

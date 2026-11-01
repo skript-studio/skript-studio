@@ -179,7 +179,10 @@ mod tests {
         assert_eq!(entry.addon.name, "Skript");
         assert!((entry.addon.usage_score - 1238.7).abs() < 1e-6);
         assert_eq!(entry.return_type.as_deref(), Some("Text"));
-        assert_eq!(entry.pattern_variants(), vec!["([craft]bukkit|minecraft|skript)( |-)version"]);
+        assert_eq!(
+            entry.pattern_variants(),
+            vec!["([craft]bukkit|minecraft|skript)( |-)version"]
+        );
     }
 
     #[test]

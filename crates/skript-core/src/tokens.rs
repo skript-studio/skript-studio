@@ -103,12 +103,18 @@ pub fn tokenize(text: &str) -> Vec<SemanticToken> {
             Token::Indent | Token::Dedent | Token::Newline => continue,
 
             // Delimiters.
-            Token::LParen | Token::RParen | Token::LBrace | Token::RBrace
-            | Token::LBracket | Token::RBracket => continue,
+            Token::LParen
+            | Token::RParen
+            | Token::LBrace
+            | Token::RBrace
+            | Token::LBracket
+            | Token::RBracket => continue,
 
             // String content (simple + interpolation fragments + MiniMessage).
-            Token::String(_) | Token::StrText(_)
-            | Token::MiniMessageOpen(_) | Token::MiniMessageClose(_) => {
+            Token::String(_)
+            | Token::StrText(_)
+            | Token::MiniMessageOpen(_)
+            | Token::MiniMessageClose(_) => {
                 let li = line_index_for_offset(&line_starts, start);
                 tokens_by_line[li].push((start, len, SemanticType::String));
             }
@@ -171,13 +177,28 @@ pub fn tokenize(text: &str) -> Vec<SemanticToken> {
             }
 
             // Operators.
-            Token::Plus | Token::Minus | Token::Star | Token::Slash
-            | Token::Percent | Token::Caret | Token::Tilde
-            | Token::EqualEqual | Token::NotEqual | Token::LessEqual
-            | Token::GreaterEqual | Token::Less | Token::Greater
-            | Token::Equal | Token::ColonEqual | Token::PlusEqual
-            | Token::MinusEqual | Token::StarEqual | Token::SlashEqual
-            | Token::Dot | Token::Arrow | Token::Pipe => {
+            Token::Plus
+            | Token::Minus
+            | Token::Star
+            | Token::Slash
+            | Token::Percent
+            | Token::Caret
+            | Token::Tilde
+            | Token::EqualEqual
+            | Token::NotEqual
+            | Token::LessEqual
+            | Token::GreaterEqual
+            | Token::Less
+            | Token::Greater
+            | Token::Equal
+            | Token::ColonEqual
+            | Token::PlusEqual
+            | Token::MinusEqual
+            | Token::StarEqual
+            | Token::SlashEqual
+            | Token::Dot
+            | Token::Arrow
+            | Token::Pipe => {
                 let li = line_index_for_offset(&line_starts, start);
                 tokens_by_line[li].push((start, len, SemanticType::Operator));
             }
@@ -249,14 +270,49 @@ fn is_type(lower: &str) -> bool {
     TYPES
         .get_or_init(|| {
             [
-                "player", "players", "number", "numbers", "integer", "text", "string",
-                "strings", "location", "locations", "entity", "entities", "item",
-                "items", "itemstack", "itemtype", "boolean", "world", "worlds",
-                "gamemode", "material", "materials", "block", "blocks", "object",
-                "objects", "slot", "inventory", "enchantment", "potion", "vector",
-                "direction", "date", "timespan", "timeperiod", "damagecause",
-                "entitytype", "entitydata", "livingentity", "offlineplayer",
-                "commandsender", "color", "chatcolor",
+                "player",
+                "players",
+                "number",
+                "numbers",
+                "integer",
+                "text",
+                "string",
+                "strings",
+                "location",
+                "locations",
+                "entity",
+                "entities",
+                "item",
+                "items",
+                "itemstack",
+                "itemtype",
+                "boolean",
+                "world",
+                "worlds",
+                "gamemode",
+                "material",
+                "materials",
+                "block",
+                "blocks",
+                "object",
+                "objects",
+                "slot",
+                "inventory",
+                "enchantment",
+                "potion",
+                "vector",
+                "direction",
+                "date",
+                "timespan",
+                "timeperiod",
+                "damagecause",
+                "entitytype",
+                "entitydata",
+                "livingentity",
+                "offlineplayer",
+                "commandsender",
+                "color",
+                "chatcolor",
             ]
             .iter()
             .copied()
@@ -374,10 +430,7 @@ mod tests {
     #[test]
     fn tokenizes_type_after_keyword() {
         let toks = tokenize("set {_x} to player");
-        let types: Vec<_> = toks
-            .iter()
-            .filter(|t| t.ty == SemanticType::Type)
-            .collect();
+        let types: Vec<_> = toks.iter().filter(|t| t.ty == SemanticType::Type).collect();
         assert!(!types.is_empty(), "expected at least one type token");
     }
 

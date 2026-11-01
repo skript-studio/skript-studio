@@ -1,8 +1,8 @@
 //! Utilities for resolving positions to symbols and finding references in the AST.
 
 use crate::ast::{
-    AssignmentTarget, Expression, NodeRef, Program, Span, Statement, TopLevelItem, Visitor,
-    node_at_offset, walk_assignment_target, walk_expression,
+    node_at_offset, walk_assignment_target, walk_expression, AssignmentTarget, Expression, NodeRef,
+    Program, Span, Statement, TopLevelItem, Visitor,
 };
 use crate::semantic::SemanticAnalysis;
 
@@ -278,6 +278,8 @@ mod tests {
         let symbol = find_symbol_at_offset(&parse_result.program, &analysis, offset).unwrap();
         let refs = find_references(&parse_result.program, &symbol);
         assert!(!refs.is_empty());
-        assert!(refs.iter().any(|s| source[s.start..s.end].contains("greet")));
+        assert!(refs
+            .iter()
+            .any(|s| source[s.start..s.end].contains("greet")));
     }
 }

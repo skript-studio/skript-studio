@@ -263,7 +263,10 @@ mod tests {
             .as_any()
             .downcast_ref::<ChoicePatternElement>()
             .unwrap();
-        choice_element.pattern_elements.borrow_mut().push(alternative);
+        choice_element
+            .pattern_elements
+            .borrow_mut()
+            .push(alternative);
     }
 
     fn simple(keyword: &str, starting: bool, ending: bool) -> Keyword {
@@ -362,7 +365,10 @@ mod tests {
         assert_eq!(
             keywords,
             vec![Keyword::Choice {
-                choices: vec![vec![simple("a", true, true)], vec![simple("bb", true, true)]],
+                choices: vec![
+                    vec![simple("a", true, true)],
+                    vec![simple("bb", true, true)]
+                ],
             }]
         );
         assert!(keywords[0].is_present("a"));
@@ -414,9 +420,9 @@ mod tests {
         assert!(all_present(&keywords, "give a apple"));
         assert!(!all_present(&keywords, "take an apple")); // prefix "give" missing
         assert!(!all_present(&keywords, "give an")); // suffix "apple" missing
-        // Neither "a" nor "an" occurs anywhere (note: a single-letter
-        // alternative is `contains`-matched, so "green chair" WOULD pass —
-        // the prefilter is a cheap heuristic, not exact).
+                                                     // Neither "a" nor "an" occurs anywhere (note: a single-letter
+                                                     // alternative is `contains`-matched, so "green chair" WOULD pass —
+                                                     // the prefilter is a cheap heuristic, not exact).
         assert!(!keywords[1].is_present("green cheese"));
 
         // 4 ("give") + min(1, 2) + 5 ("apple").
@@ -435,7 +441,10 @@ mod tests {
         // The group's inner literal inherits starting = true; the literal
         // AFTER the group does not (the group itself clears `starting`).
         let keywords = Keyword::build_keywords(&group);
-        assert_eq!(keywords, vec![simple("very", true, false), simple("big", false, true)]);
+        assert_eq!(
+            keywords,
+            vec![simple("very", true, false), simple("big", false, true)]
+        );
         assert!(all_present(&keywords, "very big"));
         assert!(!all_present(&keywords, "not very big")); // "very" must be a prefix
         assert_eq!(Keyword::compute_min_length(&group), 7);
@@ -454,7 +463,7 @@ mod tests {
         assert_eq!(keywords, vec![simple("cat", true, true)]);
         assert!(keywords[0].is_present("cat"));
         assert!(!keywords[0].is_present("the cat")); // starting → prefix required
-        // Parse tags have zero min length.
+                                                     // Parse tags have zero min length.
         assert_eq!(Keyword::compute_min_length(&tag), 3);
     }
 
@@ -548,7 +557,10 @@ mod tests {
         assert_eq!(
             pattern.keywords,
             vec![Keyword::Choice {
-                choices: vec![vec![simple("a", true, true)], vec![simple("bb", true, true)]],
+                choices: vec![
+                    vec![simple("a", true, true)],
+                    vec![simple("bb", true, true)]
+                ],
             }]
         );
     }

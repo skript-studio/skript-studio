@@ -29,7 +29,9 @@ impl TypeInference {
     }
 
     pub fn get_type(&self, span_start: usize) -> &TypeInfo {
-        self.expr_types.get(&span_start).unwrap_or(&TypeInfo::Unknown)
+        self.expr_types
+            .get(&span_start)
+            .unwrap_or(&TypeInfo::Unknown)
     }
 }
 
@@ -121,10 +123,14 @@ impl TypeInferenceBuilder {
         match bin.operator {
             BinaryOp::Concat => TypeInfo::Known("text".to_string()),
             BinaryOp::And | BinaryOp::Or => TypeInfo::Known("boolean".to_string()),
-            BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Gt
-            | BinaryOp::Leq | BinaryOp::Geq | BinaryOp::In | BinaryOp::InstanceOf => {
-                TypeInfo::Known("boolean".to_string())
-            }
+            BinaryOp::Eq
+            | BinaryOp::Neq
+            | BinaryOp::Lt
+            | BinaryOp::Gt
+            | BinaryOp::Leq
+            | BinaryOp::Geq
+            | BinaryOp::In
+            | BinaryOp::InstanceOf => TypeInfo::Known("boolean".to_string()),
             BinaryOp::Add => {
                 if left_ty == TypeInfo::Known("text".to_string())
                     || right_ty == TypeInfo::Known("text".to_string())
@@ -275,13 +281,10 @@ impl Visitor for TypeInferenceBuilder {
             Statement::If(s) => {
                 self.infer_expression(&s.condition);
                 let parent = self.current_scope;
-                if let Some(child) = self.scopes.scopes[parent]
-                    .children
-                    .iter()
-                    .find(|&&idx| {
-                        self.scopes.scopes[idx].kind == crate::semantic::scope::ScopeKind::Block
-                            && !self.scopes.scopes[idx].children.is_empty()
-                    }) {
+                if let Some(child) = self.scopes.scopes[parent].children.iter().find(|&&idx| {
+                    self.scopes.scopes[idx].kind == crate::semantic::scope::ScopeKind::Block
+                        && !self.scopes.scopes[idx].children.is_empty()
+                }) {
                     self.current_scope = *child;
                 }
                 for stmt in &s.body {
@@ -367,7 +370,9 @@ impl Visitor for TypeInferenceBuilder {
             Statement::Assignment(s) => {
                 let val_ty = self.infer_expression(&s.value);
                 if let AssignmentTarget::Variable(v) = &s.target {
-                    self.inference.expr_types.insert(v.span.start, val_ty.clone());
+                    self.inference
+                        .expr_types
+                        .insert(v.span.start, val_ty.clone());
                 }
             }
             Statement::Effect(s) => {
@@ -423,7 +428,6 @@ fn expr_span_start(expr: &Expression) -> usize {
 mod tests {
     use super::*;
     use crate::semantic::scope::{Symbol, SymbolKind};
-    
 
     fn num_literal(value: &str, start: usize) -> Expression {
         Expression::Literal(Literal::Number(NumberLiteral {
@@ -497,7 +501,8 @@ mod tests {
                 declared_at: Span::new(0, 4),
                 type_name: Some("text".into()),
             },
-        ).ok();
+        )
+        .ok();
         let expr = variable("name", 5);
         let mut builder = TypeInferenceBuilder::new(tree, FunctionRegistry::new());
         let ty = builder.infer_expression(&expr);
@@ -579,7 +584,12 @@ mod tests {
 
     #[test]
     fn test_comparison_boolean() {
-        let expr = binary(num_literal("1", 0), BinaryOp::Lt, num_literal("2", 2), Span::new(0, 3));
+        let expr = binary(
+            num_literal("1", 0),
+            BinaryOp::Lt,
+            num_literal("2", 2),
+            Span::new(0, 3),
+        );
         let mut builder = TypeInferenceBuilder::new(ScopeTree::new(), FunctionRegistry::new());
         let ty = builder.infer_expression(&expr);
         assert_eq!(ty, TypeInfo::Known("boolean".to_string()));

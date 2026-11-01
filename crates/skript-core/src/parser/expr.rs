@@ -20,13 +20,10 @@ fn get_precedence(token: &Token) -> Option<(u8, bool)> {
     match token {
         Token::Keyword("or") => Some((1, true)),
         Token::Keyword("and") => Some((2, true)),
-        Token::Keyword("is")
-        | Token::Keyword("isn't")
-        | Token::EqualEqual
-        | Token::NotEqual => Some((3, true)),
-        Token::Less | Token::Greater | Token::LessEqual | Token::GreaterEqual => {
-            Some((4, true))
+        Token::Keyword("is") | Token::Keyword("isn't") | Token::EqualEqual | Token::NotEqual => {
+            Some((3, true))
         }
+        Token::Less | Token::Greater | Token::LessEqual | Token::GreaterEqual => Some((4, true)),
         Token::Keyword("in") | Token::Keyword("instanceof") => Some((5, true)),
         Token::Identifier(s) if s == "instanceof" => Some((5, true)),
         Token::Tilde => Some((6, true)),
@@ -262,38 +259,23 @@ fn parse_prefix(parser: &mut Parser) -> Expression {
     match tok.token {
         Token::Number(val) => {
             parser.advance();
-            Expression::Literal(Literal::Number(NumberLiteral {
-                value: val,
-                span,
-            }))
+            Expression::Literal(Literal::Number(NumberLiteral { value: val, span }))
         }
         Token::String(val) => {
             parser.advance();
-            Expression::Literal(Literal::String(StringLiteral {
-                value: val,
-                span,
-            }))
+            Expression::Literal(Literal::String(StringLiteral { value: val, span }))
         }
         Token::Boolean(val) => {
             parser.advance();
-            Expression::Literal(Literal::Boolean(BooleanLiteral {
-                value: val,
-                span,
-            }))
+            Expression::Literal(Literal::Boolean(BooleanLiteral { value: val, span }))
         }
         Token::Keyword("true") => {
             parser.advance();
-            Expression::Literal(Literal::Boolean(BooleanLiteral {
-                value: true,
-                span,
-            }))
+            Expression::Literal(Literal::Boolean(BooleanLiteral { value: true, span }))
         }
         Token::Keyword("false") => {
             parser.advance();
-            Expression::Literal(Literal::Boolean(BooleanLiteral {
-                value: false,
-                span,
-            }))
+            Expression::Literal(Literal::Boolean(BooleanLiteral { value: false, span }))
         }
         Token::Keyword("event") => {
             parser.advance();
@@ -324,10 +306,7 @@ fn parse_prefix(parser: &mut Parser) -> Expression {
                     span,
                 })
             } else {
-                Expression::Variable(Variable {
-                    name: s,
-                    span,
-                })
+                Expression::Variable(Variable { name: s, span })
             }
         }
         Token::Minus => {
@@ -516,10 +495,7 @@ mod tests {
         }
     }
 
-    fn assert_binary<'a>(
-        expr: &'a Expression,
-        op: BinaryOp,
-    ) -> (&'a Expression, &'a Expression) {
+    fn assert_binary(expr: &Expression, op: BinaryOp) -> (&Expression, &Expression) {
         match expr {
             Expression::Binary(b) => {
                 assert_eq!(b.operator, op, "binary operator mismatch");
@@ -539,28 +515,28 @@ mod tests {
         }
     }
 
-    fn assert_function_call<'a>(expr: &'a Expression) -> (&'a Expression, &'a [Expression]) {
+    fn assert_function_call(expr: &Expression) -> (&Expression, &[Expression]) {
         match expr {
             Expression::FunctionCall(f) => (&f.callee, &f.arguments),
             other => panic!("expected FunctionCall, got {:?}", other),
         }
     }
 
-    fn assert_index<'a>(expr: &'a Expression) -> (&'a Expression, &'a Expression) {
+    fn assert_index(expr: &Expression) -> (&Expression, &Expression) {
         match expr {
             Expression::Index(i) => (&i.target, &i.index),
             other => panic!("expected Index, got {:?}", other),
         }
     }
 
-    fn assert_property_access<'a>(expr: &'a Expression) -> (&'a Expression, &'a str) {
+    fn assert_property_access(expr: &Expression) -> (&Expression, &str) {
         match expr {
             Expression::PropertyAccess(p) => (&p.object, p.property.as_str()),
             other => panic!("expected PropertyAccess, got {:?}", other),
         }
     }
 
-    fn assert_parenthesized<'a>(expr: &'a Expression) -> &'a Expression {
+    fn assert_parenthesized(expr: &Expression) -> &Expression {
         match expr {
             Expression::Parenthesized(p) => &p.expression,
             other => panic!("expected Parenthesized, got {:?}", other),
@@ -1121,7 +1097,10 @@ mod tests {
         let tokens = tokenize("|");
         let mut parser = Parser::new(tokens);
         let expr = parse_expression(&mut parser);
-        assert!(!parser.errors.is_empty(), "expected errors for invalid token");
+        assert!(
+            !parser.errors.is_empty(),
+            "expected errors for invalid token"
+        );
         assert_unknown(&expr);
     }
 
@@ -1144,7 +1123,10 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let expr = parse_expression(&mut parser);
         // Should produce a parenthesized expression with an error for missing RParen
-        assert!(!parser.errors.is_empty(), "expected errors for missing RParen");
+        assert!(
+            !parser.errors.is_empty(),
+            "expected errors for missing RParen"
+        );
         // But still parse the inner expression
         match expr {
             Expression::Parenthesized(p) => {

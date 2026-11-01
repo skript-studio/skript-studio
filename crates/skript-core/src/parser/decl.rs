@@ -256,7 +256,10 @@ fn parse_command_arg(parser: &mut Parser) -> CommandArg {
     let name = match &name_tok.token {
         Token::Identifier(n) => n.clone(),
         _ => {
-            parser.error("Expected identifier for command argument name", name_tok.span);
+            parser.error(
+                "Expected identifier for command argument name",
+                name_tok.span,
+            );
             String::new()
         }
     };
@@ -384,9 +387,7 @@ fn set_metadata_field(metadata: &mut CommandMetadata, key: &str, value: &str) {
         "cooldown message" | "cooldownmessage" => {
             metadata.cooldown_message = Some(value.to_string())
         }
-        "cooldown bypass" | "cooldownbypass" => {
-            metadata.cooldown_bypass = Some(value.to_string())
-        }
+        "cooldown bypass" | "cooldownbypass" => metadata.cooldown_bypass = Some(value.to_string()),
         "aliases" => metadata.aliases = Some(value.to_string()),
         "usage" => metadata.usage = Some(value.to_string()),
         _ => {}
@@ -689,14 +690,10 @@ pub fn parse_top_level_item(parser: &mut Parser) -> Option<TopLevelItem> {
         Token::Keyword("function") => Some(TopLevelItem::Function(parse_function(parser))),
         Token::Keyword("command") => Some(TopLevelItem::Command(parse_command(parser))),
         Token::Keyword("on") => Some(TopLevelItem::Event(parse_event(parser))),
-        Token::Keyword("every") => Some(TopLevelItem::PeriodicEvent(parse_periodic_event(
-            parser,
-        ))),
+        Token::Keyword("every") => Some(TopLevelItem::PeriodicEvent(parse_periodic_event(parser))),
         Token::Keyword("options") => Some(TopLevelItem::Options(parse_options_block(parser))),
         Token::Keyword("aliases") => Some(TopLevelItem::Aliases(parse_aliases_block(parser))),
-        Token::Keyword("variables") => Some(TopLevelItem::Variables(parse_variables_block(
-            parser,
-        ))),
+        Token::Keyword("variables") => Some(TopLevelItem::Variables(parse_variables_block(parser))),
         Token::Keyword("using") => Some(TopLevelItem::Using(parse_using_directive(parser))),
         Token::Keyword("example") => Some(TopLevelItem::Example(parse_example_block(parser))),
         Token::Indent | Token::Dedent | Token::Newline | Token::Eof => None,
@@ -796,7 +793,10 @@ mod tests {
             func.parameters[1].type_.as_ref().map(|t| t.name.as_str()),
             Some("number")
         );
-        assert_eq!(func.return_type.as_ref().map(|t| t.name.as_str()), Some("number"));
+        assert_eq!(
+            func.return_type.as_ref().map(|t| t.name.as_str()),
+            Some("number")
+        );
         assert!(func.body.is_empty());
     }
 
@@ -834,7 +834,12 @@ mod tests {
         };
 
         assert_eq!(cmd.name, "/give");
-        assert_eq!(cmd.arguments.len(), 2, "expected 2 args, got {:?}", cmd.arguments);
+        assert_eq!(
+            cmd.arguments.len(),
+            2,
+            "expected 2 args, got {:?}",
+            cmd.arguments
+        );
 
         assert_eq!(cmd.arguments[0].name, "player");
         assert!(!cmd.arguments[0].optional);

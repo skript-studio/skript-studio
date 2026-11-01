@@ -298,15 +298,8 @@ pub fn is_plural(word: &str) -> (String, bool) {
             }
         }
 
-        if word.ends_with(ending.plural) {
-            return (
-                format!(
-                    "{}{}",
-                    &word[..word.len() - ending.plural.len()],
-                    ending.singular
-                ),
-                true,
-            );
+        if let Some(stripped) = word.strip_suffix(ending.plural) {
+            return (format!("{}{}", stripped, ending.singular), true);
         }
 
         // Java: word.endsWith(ending.plural().toUpperCase(Locale.ENGLISH))
@@ -362,12 +355,8 @@ pub fn to_english_plural(word: &str) -> String {
                 continue;
             }
         }
-        if word.ends_with(ending.singular) {
-            return format!(
-                "{}{}",
-                &word[..word.len() - ending.singular.len()],
-                ending.plural
-            );
+        if let Some(stripped) = word.strip_suffix(ending.singular) {
+            return format!("{}{}", stripped, ending.plural);
         }
     }
     // Java: assert false; return word + "s";
@@ -429,7 +418,7 @@ static PLURALS: &[WordEnding] = &[
     we("fe", "ves"), // most -f words' plurals can end in -fs as well as -ves
     we("h", "hes"),
     we("man", "men"),
-    we("ui", "uis"), // gui fix
+    we("ui", "uis"),   // gui fix
     we("api", "apis"), // api fix
     we("us", "i"),
     we_complete("hoe", "hoes"),
@@ -477,11 +466,17 @@ mod tests {
     #[test]
     fn next_skips_quoted_strings() {
         // closing quote of "hello world" is at 12 -> boundary after it is 13
-        assert_eq!(next("\"hello world\" rest", 0, ParseContext::Default), Some(13));
+        assert_eq!(
+            next("\"hello world\" rest", 0, ParseContext::Default),
+            Some(13)
+        );
         // unterminated quote -> -1
         assert_eq!(next("\"hello", 0, ParseContext::Default), None);
         // "" escapes: closing quote at 10
-        assert_eq!(next("\"a \"\"b\"\" c\" x", 0, ParseContext::Default), Some(11));
+        assert_eq!(
+            next("\"a \"\"b\"\" c\" x", 0, ParseContext::Default),
+            Some(11)
+        );
         // "%" inside a string toggles expression mode: a quote while inside
         // an interpolated %expression% is NOT a closing quote
         assert_eq!(next("\"a %b% c\" d", 0, ParseContext::Default), Some(9));
@@ -518,11 +513,23 @@ mod tests {
     #[test]
     fn next_occurrence_basics() {
         assert_eq!(
-            next_occurrence("hello world hello", "hello", 0, ParseContext::Default, false),
+            next_occurrence(
+                "hello world hello",
+                "hello",
+                0,
+                ParseContext::Default,
+                false
+            ),
             Some(0)
         );
         assert_eq!(
-            next_occurrence("hello world hello", "hello", 1, ParseContext::Default, false),
+            next_occurrence(
+                "hello world hello",
+                "hello",
+                1,
+                ParseContext::Default,
+                false
+            ),
             Some(12)
         );
         assert_eq!(
@@ -556,12 +563,24 @@ mod tests {
     fn next_occurrence_skips_quoted_regions() {
         // the "apples" inside quotes must be skipped; the bare one found
         assert_eq!(
-            next_occurrence("say \"apples\" and apples", "apples", 0, ParseContext::Default, false),
+            next_occurrence(
+                "say \"apples\" and apples",
+                "apples",
+                0,
+                ParseContext::Default,
+                false
+            ),
             Some(17)
         );
         // case-insensitive across the quote skip
         assert_eq!(
-            next_occurrence("say \"Apples\" and apples", "apples", 0, ParseContext::Default, false),
+            next_occurrence(
+                "say \"Apples\" and apples",
+                "apples",
+                0,
+                ParseContext::Default,
+                false
+            ),
             Some(17)
         );
         // unterminated quote -> -1
@@ -696,7 +715,7 @@ mod tests {
         assert_eq!(is_plural("guis"), ("gui".into(), true)); // gui fix
         assert_eq!(is_plural("api"), ("api".into(), false));
         assert_eq!(is_plural("apis"), ("api".into(), true)); // api fix
-        // "bus" ends with the ("us", "i") singular so it stays singular...
+                                                             // "bus" ends with the ("us", "i") singular so it stays singular...
         assert_eq!(is_plural("bus"), ("bus".into(), false));
         // ...and "buses" does NOT end with "us" (it ends with "es"), so it
         // falls through to the generic ("", "s") ending -> "buse".
@@ -754,8 +773,19 @@ mod tests {
         // what from_string stores (singular) must to_string_pretty back to
         // the original plural spelling
         for word in [
-            "numbers", "entities", "zombies", "wolves", "men", "children",
-            "boxes", "guis", "apis", "hooves", "aliases", "players", "locations",
+            "numbers",
+            "entities",
+            "zombies",
+            "wolves",
+            "men",
+            "children",
+            "boxes",
+            "guis",
+            "apis",
+            "hooves",
+            "aliases",
+            "players",
+            "locations",
             "livingentities",
         ] {
             let (updated, plural) = is_plural(word);
@@ -797,7 +827,11 @@ mod tests {
             ("gui", "guis"),
         ];
         for (singular, plural) in cases {
-            assert_eq!(&to_english_plural(singular), plural, "to_english_plural({singular})");
+            assert_eq!(
+                &to_english_plural(singular),
+                plural,
+                "to_english_plural({singular})"
+            );
             // The Java test only asserts getEnglishPlural(plural).getFirst()
             // == singular — NOT the plural flag. ("sheep" legitimately
             // reports plural=false via couldBeSingular's complete-word

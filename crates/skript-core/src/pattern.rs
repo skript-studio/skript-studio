@@ -118,7 +118,10 @@ impl CompiledPattern {
             if matches!(&self.tokens[k - 1], PatternToken::TypePlaceholder(_)) {
                 let group = type_placeholder_count(&self.tokens[..k]);
                 let captured = caps.get(group).map(|m| m.as_str()).unwrap_or("");
-                if words.iter().any(|word| captured.to_lowercase().contains(word)) {
+                if words
+                    .iter()
+                    .any(|word| captured.to_lowercase().contains(word))
+                {
                     continue;
                 }
             }
@@ -344,9 +347,10 @@ pub fn compile_pattern(parsed: &ParsedPattern) -> Result<CompiledPattern, regex:
     full_builder.case_insensitive(true);
     let full_regex = full_builder.build()?;
 
-    let is_bare_type = parsed.tokens.iter().all(|t| {
-        matches!(t, PatternToken::TypePlaceholder(_))
-    });
+    let is_bare_type = parsed
+        .tokens
+        .iter()
+        .all(|t| matches!(t, PatternToken::TypePlaceholder(_)));
 
     Ok(CompiledPattern {
         regex,
@@ -402,9 +406,9 @@ fn emit_token(token: &PatternToken, out: &mut String) {
         }
         PatternToken::TypePlaceholder(_) => {
             // Capture group for the type; the matcher validates the contents.
-            out.push_str("(");
+            out.push('(');
             out.push_str(NON_GREEDY_ANYTHING);
-            out.push_str(")");
+            out.push(')');
         }
         PatternToken::Optional(inner) => {
             out.push_str("(?:");
@@ -418,7 +422,7 @@ fn emit_token(token: &PatternToken, out: &mut String) {
                 out.push_str(&c.to_string().escape_debug().to_string());
                 out.push('?');
             }
-            out.push_str(")");
+            out.push(')');
         }
         PatternToken::Alternation(arms) => {
             out.push_str("(?:");
@@ -428,7 +432,7 @@ fn emit_token(token: &PatternToken, out: &mut String) {
                 }
                 emit_tokens(arm, out);
             }
-            out.push_str(")");
+            out.push(')');
         }
     }
 }
@@ -474,11 +478,7 @@ fn type_groups_for(tokens: &[PatternToken]) -> Vec<(String, usize)> {
     groups
 }
 
-fn collect_type_groups(
-    tokens: &[PatternToken],
-    index: &mut usize,
-    out: &mut Vec<(String, usize)>,
-) {
+fn collect_type_groups(tokens: &[PatternToken], index: &mut usize, out: &mut Vec<(String, usize)>) {
     for token in tokens {
         match token {
             PatternToken::TypePlaceholder(ty) => {

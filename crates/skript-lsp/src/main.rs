@@ -53,9 +53,8 @@ async fn main() -> anyhow::Result<()> {
 async fn serve_stdio(state: AppState) -> anyhow::Result<()> {
     tracing::info!("starting stdio LSP server");
 
-    let (service, socket) = tower_lsp::LspService::new(|client| {
-        backend::Backend::new(client, state)
-    });
+    let (service, socket) =
+        tower_lsp::LspService::new(|client| backend::Backend::new(client, state));
 
     tower_lsp::Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)
         .serve(service)
@@ -116,10 +115,7 @@ async fn serve_websocket(state: AppState, port: u16) -> anyhow::Result<()> {
 }
 
 /// Run one LSP session over a WebSocket-upgraded TCP stream.
-async fn serve_connection(
-    stream: tokio::net::TcpStream,
-    state: AppState,
-) -> anyhow::Result<()> {
+async fn serve_connection(stream: tokio::net::TcpStream, state: AppState) -> anyhow::Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(stream)
         .await
         .map_err(|e| anyhow::anyhow!("websocket upgrade failed: {e}"))?;

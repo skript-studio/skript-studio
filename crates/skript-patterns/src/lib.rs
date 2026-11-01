@@ -18,4 +18,4 @@ pub use error::MalformedPatternError;
 pub use match_result::{MatchResult, ParseFlags, RegexMatchInfo, SlotMatch, TypeSpec};
 pub use parse_context::ParseContext;
 pub use pattern::{SkriptPattern, StringificationProperties};
-pub use resolver::{PermissiveResolver, TypeResolver, set_type_resolver, with_type_resolver};
+pub use resolver::{set_type_resolver, with_type_resolver, PermissiveResolver, TypeResolver};

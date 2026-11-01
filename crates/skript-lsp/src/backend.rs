@@ -38,19 +38,18 @@ use tower_lsp::jsonrpc::Result as RpcResult;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
-    CompletionResponse, Diagnostic,
-    DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
+    CompletionResponse, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
     InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintKind,
     InlayHintLabel, InlayHintParams, InsertTextFormat, Location, MarkupContent, MarkupKind, OneOf,
-    ParameterInformation, ParameterLabel, Position, Range,
-    ReferenceParams, SemanticToken, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
-    SemanticTokensServerCapabilities, SemanticTokenType, ServerCapabilities, SignatureHelp,
-    SignatureHelpOptions, SignatureHelpParams, SignatureInformation,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, WorkspaceEdit,
+    ParameterInformation, ParameterLabel, Position, Range, ReferenceParams, SemanticToken,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    SignatureInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -176,16 +175,17 @@ fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnost
 ///
 /// Free function so it can be called from both the `Backend` method and the
 /// spawned engine-build task (which doesn't own a `Backend`).
-async fn publish_merged_diagnostics(
-    state: &AppState,
-    client: &tower_lsp::Client,
-    uri: &str,
-) {
-    let Some(text) = state.get_doc(uri) else { return };
+async fn publish_merged_diagnostics(state: &AppState, client: &tower_lsp::Client, uri: &str) {
+    let Some(text) = state.get_doc(uri) else {
+        return;
+    };
     let config = state.config();
 
     let mut lsp_diags = core_lsp_diagnostics(state, uri, &text);
-    if let Some(line_diags) = state.java_check(text.clone(), build_check_config(&config)).await {
+    if let Some(line_diags) = state
+        .java_check(text.clone(), build_check_config(&config))
+        .await
+    {
         lsp_diags.extend(line_diags.into_iter().map(line_diagnostic_to_lsp));
     }
 
@@ -227,7 +227,9 @@ pub fn line_diagnostic_to_lsp(d: skript_checks::LineDiagnostic) -> Diagnostic {
             skript_checks::Severity::Info => DiagnosticSeverity::INFORMATION,
         }),
         source: Some("skript".to_owned()),
-        code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code.to_owned())),
+        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+            d.code.to_owned(),
+        )),
         message: d.message,
         ..Default::default()
     }
@@ -285,11 +287,10 @@ impl LanguageServer for Backend {
             let client = self.client.clone();
             tokio::spawn(async move {
                 let build_state = state.clone();
-                let failures = tokio::task::spawn_blocking(move || {
-                    build_state.ensure_java_engine()
-                })
-                .await
-                .unwrap_or(usize::MAX);
+                let failures =
+                    tokio::task::spawn_blocking(move || build_state.ensure_java_engine())
+                        .await
+                        .unwrap_or(usize::MAX);
                 if failures == usize::MAX {
                     client
                         .log_message(
@@ -333,8 +334,8 @@ impl LanguageServer for Backend {
                 ..Default::default()
             }),
             hover_provider: Some(HoverProviderCapability::Simple(true)),
-            semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
-                SemanticTokensOptions {
+            semantic_tokens_provider: Some(
+                SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
                     legend: SemanticTokensLegend {
                         token_types: TOKEN_LEGEND.to_vec(),
                         token_modifiers: vec![],
@@ -342,8 +343,8 @@ impl LanguageServer for Backend {
                     full: Some(SemanticTokensFullOptions::Bool(true)),
                     range: Some(false),
                     ..Default::default()
-                },
-            )),
+                }),
+            ),
             document_symbol_provider: Some(OneOf::Left(true)),
             folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
             definition_provider: Some(OneOf::Left(true)),
@@ -393,8 +394,7 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        self.state
-            .open_doc(uri.clone(), params.text_document.text);
+        self.state.open_doc(uri.clone(), params.text_document.text);
         self.publish_diagnostics(&uri).await;
     }
 
@@ -419,11 +419,7 @@ impl LanguageServer for Backend {
         if !self.state.ready() {
             return Ok(None);
         }
-        let uri = params
-            .text_document_position
-            .text_document
-            .uri
-            .to_string();
+        let uri = params.text_document_position.text_document.uri.to_string();
 
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
@@ -474,7 +470,11 @@ impl LanguageServer for Backend {
         items.sort_by(|a, b| {
             a.sort_bucket
                 .cmp(&b.sort_bucket)
-                .then_with(|| b.usage_score.partial_cmp(&a.usage_score).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    b.usage_score
+                        .partial_cmp(&a.usage_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .then_with(|| a.label.cmp(&b.label))
         });
         items.truncate(max);
@@ -485,7 +485,9 @@ impl LanguageServer for Backend {
                 label: it.label,
                 kind: Some(CompletionItemKind::SNIPPET),
                 detail: Some(it.detail),
-                documentation: Some(tower_lsp::lsp_types::Documentation::String(it.documentation)),
+                documentation: Some(tower_lsp::lsp_types::Documentation::String(
+                    it.documentation,
+                )),
                 insert_text: Some(it.insert_text),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),
                 filter_text: Some(it.filter_text),
@@ -496,14 +498,15 @@ impl LanguageServer for Backend {
         Ok(Some(CompletionResponse::Array(lsp_items)))
     }
 
-    async fn hover(
-        &self,
-        params: tower_lsp::lsp_types::HoverParams,
-    ) -> RpcResult<Option<Hover>> {
+    async fn hover(&self, params: tower_lsp::lsp_types::HoverParams) -> RpcResult<Option<Hover>> {
         if !self.state.ready() {
             return Ok(None);
         }
-        let uri = params.text_document_position_params.text_document.uri.to_string();
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
         };
@@ -521,12 +524,24 @@ impl LanguageServer for Backend {
             .flatten();
 
         // 2. New: AST-resolved hover using cached snapshot (takes priority — more precise)
-        let ast_hover = self.state.with_snapshot(&uri, |snap| {
-            hover::hover_at_ast(&text, pos.line, pos.character, &snap.parse_result.program, &snap.analysis)
-        }).flatten();
+        let ast_hover = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                hover::hover_at_ast(
+                    &text,
+                    pos.line,
+                    pos.character,
+                    &snap.parse_result.program,
+                    &snap.analysis,
+                )
+            })
+            .flatten();
 
         let info = ast_hover
-            .map(|a| hover::HoverInfo { markdown: a.markdown, range: a.range })
+            .map(|a| hover::HoverInfo {
+                markdown: a.markdown,
+                range: a.range,
+            })
             .or(syntax_hover);
 
         let Some(info) = info else {
@@ -601,7 +616,11 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> RpcResult<Option<GotoDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri.to_string();
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
         };
@@ -620,7 +639,11 @@ impl LanguageServer for Backend {
                     offset,
                 )?;
                 Some(Location {
-                    uri: params.text_document_position_params.text_document.uri.clone(),
+                    uri: params
+                        .text_document_position_params
+                        .text_document
+                        .uri
+                        .clone(),
                     range: span_to_range(&text, symbol.declaration_span),
                 })
             })
@@ -629,10 +652,7 @@ impl LanguageServer for Backend {
         Ok(location.map(GotoDefinitionResponse::Scalar))
     }
 
-    async fn references(
-        &self,
-        params: ReferenceParams,
-    ) -> RpcResult<Option<Vec<Location>>> {
+    async fn references(&self, params: ReferenceParams) -> RpcResult<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri.to_string();
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
@@ -672,7 +692,11 @@ impl LanguageServer for Backend {
         &self,
         params: SignatureHelpParams,
     ) -> RpcResult<Option<SignatureHelp>> {
-        let uri = params.text_document_position_params.text_document.uri.to_string();
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
         let pos = params.text_document_position_params.position;
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
@@ -700,8 +724,12 @@ impl LanguageServer for Backend {
                         documentation: None,
                     })
                     .collect();
-                let param_labels: Vec<String> =
-                    func.decl.parameters.iter().map(|p| p.name.clone()).collect();
+                let param_labels: Vec<String> = func
+                    .decl
+                    .parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
                 let signature = SignatureInformation {
                     label: format!("{}({})", func.decl.name, param_labels.join(", ")),
                     documentation: None,
@@ -726,10 +754,7 @@ impl LanguageServer for Backend {
         Ok(info)
     }
 
-    async fn code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> RpcResult<Option<CodeActionResponse>> {
+    async fn code_action(&self, params: CodeActionParams) -> RpcResult<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.to_string();
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
@@ -742,7 +767,7 @@ impl LanguageServer for Backend {
         // range with "" keeps the line's newline, leaving a blank line —
         // plan-mandated behavior.
         for diag in &params.context.diagnostics {
-            let is_unused = diag.code.as_ref().map_or(false, |c| {
+            let is_unused = diag.code.as_ref().is_some_and(|c| {
                 matches!(
                     c,
                     tower_lsp::lsp_types::NumberOrString::String(s) if s == "unused-variable"
@@ -789,10 +814,7 @@ impl LanguageServer for Backend {
         Ok(Some(actions))
     }
 
-    async fn inlay_hint(
-        &self,
-        params: InlayHintParams,
-    ) -> RpcResult<Option<Vec<InlayHint>>> {
+    async fn inlay_hint(&self, params: InlayHintParams) -> RpcResult<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri.to_string();
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
@@ -845,10 +867,8 @@ fn infer_context(line: &str) -> CompletionContext {
 
 /// Convert a byte-offset `Span` to an LSP `Range`.
 fn span_to_range(source: &str, span: skript_core::ast::Span) -> Range {
-    let (start_line, start_col) =
-        skript_core::validation::offset_to_linecol(source, span.start);
-    let (end_line, end_col) =
-        skript_core::validation::offset_to_linecol(source, span.end);
+    let (start_line, start_col) = skript_core::validation::offset_to_linecol(source, span.start);
+    let (end_line, end_col) = skript_core::validation::offset_to_linecol(source, span.end);
     Range::new(
         Position::new(start_line, start_col),
         Position::new(end_line, end_col),
@@ -954,9 +974,7 @@ fn collect_type_hints(
     impl skript_core::ast::Visitor for TypeHintCollector<'_> {
         fn visit_statement(&mut self, statement: &skript_core::ast::Statement) {
             if let skript_core::ast::Statement::Assignment(assignment) = statement {
-                if let skript_core::ast::AssignmentTarget::Variable(variable) =
-                    &assignment.target
-                {
+                if let skript_core::ast::AssignmentTarget::Variable(variable) = &assignment.target {
                     // The type inference table is keyed by the value
                     // expression's span start; unknown expressions map to
                     // `TypeInfo::Unknown` and are skipped.
@@ -966,8 +984,10 @@ fn collect_type_hints(
                         .get_type(assignment.value.span().start);
                     if let skript_core::semantic::types::TypeInfo::Known(ty) = ty {
                         // Hint renders right after the variable name.
-                        let (line, col) =
-                            skript_core::validation::offset_to_linecol(self.source, variable.span.end);
+                        let (line, col) = skript_core::validation::offset_to_linecol(
+                            self.source,
+                            variable.span.end,
+                        );
                         self.hints.push(InlayHint {
                             position: Position::new(line, col),
                             label: InlayHintLabel::String(format!(": {ty}")),
@@ -1000,7 +1020,11 @@ fn encode_semantic_tokens(toks: &[skript_core::tokens::SemanticToken]) -> Vec<Se
     let mut prev_col = 0u32;
     for t in toks {
         let delta_line = t.line - prev_line;
-        let delta_col = if delta_line == 0 { t.col - prev_col } else { t.col };
+        let delta_col = if delta_line == 0 {
+            t.col - prev_col
+        } else {
+            t.col
+        };
         out.push(SemanticToken {
             delta_line,
             delta_start: delta_col,
@@ -1043,7 +1067,9 @@ fn find_function_call_context(source: &str, offset: usize) -> Option<(String, u3
 
     // Extract function name: word characters before '('.
     let before = &text[..call_start];
-    let func_name = before.rsplit(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+    let func_name = before
+        .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()?;
     if func_name.is_empty() {
         return None;
     }

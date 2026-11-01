@@ -185,7 +185,8 @@ impl SkriptPattern {
                 } else if let Some(group_element) = any.downcast_ref::<GroupPatternElement>() {
                     // For groups and optionals, simply recurse.
                     Step::Inner(group_element.pattern_element())
-                } else if let Some(optional_element) = any.downcast_ref::<OptionalPatternElement>() {
+                } else if let Some(optional_element) = any.downcast_ref::<OptionalPatternElement>()
+                {
                     Step::Inner(optional_element.pattern_element())
                 } else if any.downcast_ref::<TypePatternElement>().is_some() {
                     // Increment when seeing a type.
@@ -273,7 +274,10 @@ mod tests {
             .as_any()
             .downcast_ref::<ChoicePatternElement>()
             .unwrap();
-        choice_element.pattern_elements.borrow_mut().push(alternative);
+        choice_element
+            .pattern_elements
+            .borrow_mut()
+            .push(alternative);
     }
 
     /// A `%object%`-style type element. `TypePatternElement::from_string`
@@ -402,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn stringification_default_matches_java_builder_defaults() {
         // Java: builder() starts with excludeParseTags = false and
         // excludeTypeFlags = false; DEFAULT = builder().build().
@@ -409,7 +414,10 @@ mod tests {
         assert!(!StringificationProperties::DEFAULT.exclude_type_flags);
         // Port-only extras (no v2.17.1 Java counterpart) also default to
         // false so the DEFAULT is a plain `Default::default()`.
-        assert_eq!(StringificationProperties::DEFAULT, StringificationProperties::default());
+        assert_eq!(
+            StringificationProperties::DEFAULT,
+            StringificationProperties::default()
+        );
     }
 
     // ------------------------------------------------------------------
@@ -455,7 +463,11 @@ mod tests {
         assert_eq!(pattern.count_non_null_types(), 1);
 
         let result = pattern
-            .match_("give stick an apple", ParseFlags::ALL, ParseContext::Default)
+            .match_(
+                "give stick an apple",
+                ParseFlags::ALL,
+                ParseContext::Default,
+            )
             .expect("'give stick an apple' matches");
         assert_eq!(result.expressions.len(), 1);
         assert!(result.expressions[0].is_some());
@@ -465,7 +477,11 @@ mod tests {
             .is_some());
         // Keyword prefilter: "give" is a required prefix.
         assert!(pattern
-            .match_("take stick an apple", ParseFlags::ALL, ParseContext::Default)
+            .match_(
+                "take stick an apple",
+                ParseFlags::ALL,
+                ParseContext::Default
+            )
             .is_none());
     }
 }

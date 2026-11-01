@@ -25,10 +25,9 @@ pub fn analyze(program: &Program) -> SemanticAnalysis {
     let scope_tree = scope::ScopeTreeBuilder::new().build(program);
     let function_registry = functions::FunctionRegistryBuilder::new().build(program);
     let variable_tracker = variables::VariableTrackerBuilder::new().build(program);
-    let type_inference = types::TypeInferenceBuilder::new(
-        scope_tree.clone(),
-        function_registry.clone(),
-    ).build(program);
+    let type_inference =
+        types::TypeInferenceBuilder::new(scope_tree.clone(), function_registry.clone())
+            .build(program);
 
     let mut errors: Vec<String> = Vec::new();
     errors.extend(function_registry.errors.iter().cloned());
@@ -97,6 +96,10 @@ mod tests {
         let result = analyze_source(
             "function foo():\n\tbroadcast \"a\"\nfunction foo():\n\tbroadcast \"b\"",
         );
-        assert!(!result.errors.is_empty(), "expected errors, got: {:#?}", result.errors);
+        assert!(
+            !result.errors.is_empty(),
+            "expected errors, got: {:#?}",
+            result.errors
+        );
     }
 }

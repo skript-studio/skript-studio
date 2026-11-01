@@ -196,11 +196,10 @@ fn compile_element(
                 let inner = chars_to_string(&pattern[i + 1..end]);
                 // Java: TypePatternElement.fromString(...) — returns Self, so
                 // wrap it in the shared handle here.
-                let element: ElementRef =
-                    Rc::new(RefCell::new(TypePatternElement::from_string(
-                        &inner,
-                        expr_offset,
-                    )));
+                let element: ElementRef = Rc::new(RefCell::new(TypePatternElement::from_string(
+                    &inner,
+                    expr_offset,
+                )));
 
                 first = Some(append_element(first, element));
 
@@ -442,8 +441,8 @@ fn chars_to_string(chars: &[char]) -> String {
 mod tests {
     use super::*;
     use crate::elements::{
-        ChoicePatternElement, GroupPatternElement, LiteralPatternElement,
-        OptionalPatternElement, ParseTagPatternElement, RegexPatternElement, TypePatternElement,
+        ChoicePatternElement, GroupPatternElement, LiteralPatternElement, OptionalPatternElement,
+        ParseTagPatternElement, RegexPatternElement, TypePatternElement,
     };
     use crate::match_result::{ParseFlags, TypeSpec};
 

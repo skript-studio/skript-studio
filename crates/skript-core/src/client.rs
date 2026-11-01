@@ -10,8 +10,7 @@ use thiserror::Error;
 use url::Url;
 
 /// Default endpoint for the SkriptHub addon syntax dump.
-pub const DEFAULT_SKRIPTHUB_URL: &str =
-    "https://skripthub.net/api/v1/addonsyntaxlist/";
+pub const DEFAULT_SKRIPTHUB_URL: &str = "https://skripthub.net/api/v1/addonsyntaxlist/";
 
 /// Errors that can occur while fetching or parsing the syntax list.
 #[derive(Debug, Error)]
@@ -57,7 +56,13 @@ pub async fn fetch_syntax_list(url: &str) -> Result<Vec<SyntaxEntry>, FetchError
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
 
-    let raw: Vec<RawEntry> = client.get(url).send().await?.error_for_status()?.json().await?;
+    let raw: Vec<RawEntry> = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     Ok(raw.into_iter().map(normalize).collect())
 }
 

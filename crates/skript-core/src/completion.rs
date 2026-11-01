@@ -6,8 +6,8 @@
 //! matches and addons with higher `usage_score`.
 
 use crate::matching::EntryTable;
-use crate::semantic::{FunctionRegistry, SemanticAnalysis};
 use crate::semantic::scope::SymbolKind;
+use crate::semantic::{FunctionRegistry, SemanticAnalysis};
 use crate::syntax::{SyntaxEntry, SyntaxType};
 use std::collections::HashSet;
 
@@ -84,7 +84,11 @@ pub fn completions(
     items.sort_by(|a, b| {
         a.sort_bucket
             .cmp(&b.sort_bucket)
-            .then_with(|| b.usage_score.partial_cmp(&a.usage_score).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                b.usage_score
+                    .partial_cmp(&a.usage_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| a.label.cmp(&b.label))
     });
 
@@ -101,18 +105,25 @@ pub fn complete_keywords(prefix: &str) -> Vec<CompletionItem> {
         ("while", "while ${1:condition}:", "While loop"),
         ("do while", "do while ${1:condition}:", "Do-while loop"),
         ("loop", "loop ${1:items}:", "Loop through items"),
-        ("for each", "for each ${1:variable} in ${2:items}:", "For-each loop"),
+        (
+            "for each",
+            "for each ${1:variable} in ${2:items}:",
+            "For-each loop",
+        ),
         ("set", "set ${1:variable} to ${2:value}", "Set variable"),
         ("delete", "delete ${1:variable}", "Delete variable"),
         ("add", "add ${1:value} to ${2:variable}", "Add to variable"),
-        ("remove", "remove ${1:value} from ${2:variable}", "Remove from variable"),
+        (
+            "remove",
+            "remove ${1:value} from ${2:variable}",
+            "Remove from variable",
+        ),
     ];
 
     let prefix_lower = prefix.trim().to_lowercase();
-    let mut items: Vec<CompletionItem> = keywords.iter()
-        .filter(|(label, _, _)| {
-            prefix_lower.is_empty() || label.starts_with(&prefix_lower)
-        })
+    let mut items: Vec<CompletionItem> = keywords
+        .iter()
+        .filter(|(label, _, _)| prefix_lower.is_empty() || label.starts_with(&prefix_lower))
         .map(|(label, insert, detail)| CompletionItem {
             label: label.to_string(),
             insert_text: insert.to_string(),
@@ -125,7 +136,11 @@ pub fn complete_keywords(prefix: &str) -> Vec<CompletionItem> {
         })
         .collect();
 
-    items.sort_by(|a, b| a.sort_bucket.cmp(&b.sort_bucket).then(a.label.cmp(&b.label)));
+    items.sort_by(|a, b| {
+        a.sort_bucket
+            .cmp(&b.sort_bucket)
+            .then(a.label.cmp(&b.label))
+    });
     items
 }
 
@@ -176,10 +191,7 @@ pub fn complete_variables(
 }
 
 /// Completion items for function calls in body context.
-pub fn complete_functions(
-    prefix: &str,
-    registry: &FunctionRegistry,
-) -> Vec<CompletionItem> {
+pub fn complete_functions(prefix: &str, registry: &FunctionRegistry) -> Vec<CompletionItem> {
     let prefix_lower = prefix.trim().to_lowercase();
     let mut items = Vec::new();
 
@@ -189,12 +201,19 @@ pub fn complete_functions(
             continue;
         }
 
-        let params: Vec<&str> = func.decl.parameters.iter().map(|p| p.name.as_str()).collect();
+        let params: Vec<&str> = func
+            .decl
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         let sig = params.join(", ");
         let insert = if params.is_empty() {
             format!("{}()", name)
         } else {
-            let snippet_params: Vec<String> = params.iter().enumerate()
+            let snippet_params: Vec<String> = params
+                .iter()
+                .enumerate()
                 .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
                 .collect();
             format!("{}({})", name, snippet_params.join(", "))
@@ -207,12 +226,20 @@ pub fn complete_functions(
             detail: format!("function({}) \u{2014} Skript", sig),
             documentation: String::new(),
             entry_id: 0,
-            sort_bucket: if name.eq_ignore_ascii_case(&prefix_lower) { 0 } else { 1 },
+            sort_bucket: if name.eq_ignore_ascii_case(&prefix_lower) {
+                0
+            } else {
+                1
+            },
             usage_score: 0.0,
         });
     }
 
-    items.sort_by(|a, b| a.sort_bucket.cmp(&b.sort_bucket).then(a.label.cmp(&b.label)));
+    items.sort_by(|a, b| {
+        a.sort_bucket
+            .cmp(&b.sort_bucket)
+            .then(a.label.cmp(&b.label))
+    });
     items
 }
 
@@ -300,7 +327,11 @@ fn build_item(
 ) -> CompletionItem {
     let label = variant.trim().to_owned();
     let insert_text = pattern_to_snippet(variant);
-    let detail = format!("{} — {}", capitalize(entry.syntax_type.as_str()), entry.addon.name);
+    let detail = format!(
+        "{} — {}",
+        capitalize(entry.syntax_type.as_str()),
+        entry.addon.name
+    );
     let documentation = build_docs(entry);
     CompletionItem {
         label,
@@ -376,13 +407,17 @@ fn structural_completions(prefix_lower: &str) -> Vec<CompletionItem> {
     let candidates: [(&str, &str, &str); 4] = [
         ("on", "on ${1:event}:", "Start an event handler"),
         ("command", "command /${1:name}:", "Define a custom command"),
-        ("function", "function ${1:name}(${2:args}):", "Define a function"),
+        (
+            "function",
+            "function ${1:name}(${2:args}):",
+            "Define a function",
+        ),
         ("options", "options:", "Declare an options block"),
     ];
     candidates
         .iter()
         .filter_map(|(kw, snippet, desc)| {
-            if prefix_lower.is_empty() || kw.starts_with(&prefix_lower) {
+            if prefix_lower.is_empty() || kw.starts_with(prefix_lower) {
                 Some(CompletionItem {
                     label: (*kw).to_owned(),
                     insert_text: (*snippet).to_owned(),
@@ -471,19 +506,18 @@ mod tests {
             1.0,
         )]);
         let items = completions("send", CompletionContext::Body, &table, 10);
-        let send = items.iter().find(|i| i.label == "send %text% to %player%").unwrap();
+        let send = items
+            .iter()
+            .find(|i| i.label == "send %text% to %player%")
+            .unwrap();
         assert!(send.insert_text.contains("${1:text}"));
         assert!(send.insert_text.contains("${2:player}"));
     }
 
     #[test]
     fn toplevel_includes_structural_completions() {
-        let table = EntryTable::from_entries(vec![entry(
-            1,
-            "send %text%",
-            SyntaxType::Effect,
-            1.0,
-        )]);
+        let table =
+            EntryTable::from_entries(vec![entry(1, "send %text%", SyntaxType::Effect, 1.0)]);
         let items = completions("o", CompletionContext::TopLevel, &table, 50);
         assert!(items.iter().any(|i| i.label == "on"));
         assert!(items.iter().any(|i| i.label == "options"));
@@ -551,18 +585,20 @@ mod tests {
     #[test]
     fn test_complete_functions_with_params() {
         let mut registry = FunctionRegistry::new();
-        registry.register(&crate::ast::FunctionDecl {
-            name: "greet".into(),
-            parameters: vec![crate::ast::Parameter {
-                name: "name".into(),
-                type_: None,
-                default: None,
-                span: crate::ast::Span::new(0, 4),
-            }],
-            return_type: None,
-            body: vec![],
-            span: crate::ast::Span::new(0, 0),
-        }).ok();
+        registry
+            .register(&crate::ast::FunctionDecl {
+                name: "greet".into(),
+                parameters: vec![crate::ast::Parameter {
+                    name: "name".into(),
+                    type_: None,
+                    default: None,
+                    span: crate::ast::Span::new(0, 4),
+                }],
+                return_type: None,
+                body: vec![],
+                span: crate::ast::Span::new(0, 0),
+            })
+            .ok();
         let items = complete_functions("", &registry);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "greet()");

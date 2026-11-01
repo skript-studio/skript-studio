@@ -54,7 +54,11 @@ impl WsStream {
 
     /// Try to flush one or more complete LSP frames from `write_buf` out as
     /// WS messages.
-    fn flush_write(cx: &mut Context<'_>, write_buf: &mut Vec<u8>, ws: &mut WebSocketStream<TcpStream>) -> Poll<io::Result<()>> {
+    fn flush_write(
+        cx: &mut Context<'_>,
+        write_buf: &mut Vec<u8>,
+        ws: &mut WebSocketStream<TcpStream>,
+    ) -> Poll<io::Result<()>> {
         loop {
             // Parse one `Content-Length: N\r\n\r\n` header.
             let Some((header_end, content_len)) = parse_content_length(write_buf) else {
@@ -72,10 +76,7 @@ impl WsStream {
             match Pin::new(&mut *ws).poll_ready(cx) {
                 Poll::Ready(Ok(())) => {}
                 Poll::Ready(Err(e)) => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("websocket not ready: {e}"),
-                    )))
+                    return Poll::Ready(Err(io::Error::other(format!("websocket not ready: {e}"))))
                 }
                 Poll::Pending => return Poll::Pending,
             }
@@ -86,10 +87,7 @@ impl WsStream {
 
             let msg = Message::Binary(body);
             if let Err(e) = Pin::new(&mut *ws).start_send(msg) {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("websocket send failed: {e}"),
-                )));
+                return Poll::Ready(Err(io::Error::other(format!("websocket send failed: {e}"))));
             }
             // Loop to handle further buffered frames; if there are none left
             // or the next is incomplete, we'll return Ready above.
@@ -115,7 +113,7 @@ impl AsyncRead for WsStream {
                             Message::Binary(b) => b,
                             Message::Ping(_) | Message::Pong(_) => continue, // control frame
                             Message::Close(_) => return Poll::Ready(Ok(())), // clean EOF
-                            Message::Frame(_) => continue, // shouldn't surface
+                            Message::Frame(_) => continue,                   // shouldn't surface
                         };
                         if payload.is_empty() {
                             continue; // skip zero-length
@@ -129,10 +127,9 @@ impl AsyncRead for WsStream {
                         break;
                     }
                     Poll::Ready(Some(Err(e))) => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("websocket read failed: {e}"),
-                        )))
+                        return Poll::Ready(Err(io::Error::other(format!(
+                            "websocket read failed: {e}"
+                        ))))
                     }
                     Poll::Ready(None) => return Poll::Ready(Ok(())), // clean EOF
                     Poll::Pending => return Poll::Pending,
@@ -172,10 +169,9 @@ impl AsyncWrite for WsStream {
         match Self::flush_write(cx, &mut this.write_buf, &mut this.ws) {
             Poll::Ready(Ok(())) => match Pin::new(&mut this.ws).poll_flush(cx) {
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("websocket flush failed: {e}"),
-                ))),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::other(format!(
+                    "websocket flush failed: {e}"
+                )))),
                 Poll::Pending => Poll::Pending,
             },
             other => other,
@@ -187,10 +183,9 @@ impl AsyncWrite for WsStream {
         match Self::flush_write(cx, &mut this.write_buf, &mut this.ws) {
             Poll::Ready(Ok(())) => match Pin::new(&mut this.ws).poll_close(cx) {
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("websocket close failed: {e}"),
-                ))),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::other(format!(
+                    "websocket close failed: {e}"
+                )))),
                 Poll::Pending => Poll::Pending,
             },
             other => other,

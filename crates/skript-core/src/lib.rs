@@ -27,4 +27,4 @@ pub mod validation;
 pub use parser::parse_program;
 pub use syntax::{Addon, Plugin, SyntaxEntry, SyntaxType};
 
-pub use completion::{complete_keywords, complete_variables, complete_functions};
+pub use completion::{complete_functions, complete_keywords, complete_variables};

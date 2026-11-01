@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    AssignmentTarget, Program, Statement, TopLevelItem, Visitor, Span,
-    walk_top_level_item,
+    walk_top_level_item, AssignmentTarget, Program, Span, Statement, TopLevelItem, Visitor,
 };
 
 /// The kind of a scope in the scope tree.
@@ -135,17 +134,12 @@ impl ScopeTree {
     ///
     /// Returns `Err` with a message if a symbol with the same name already
     /// exists in this scope.
-    pub fn declare(
-        &mut self,
-        scope_idx: usize,
-        symbol: Symbol,
-    ) -> Result<(), String> {
+    pub fn declare(&mut self, scope_idx: usize, symbol: Symbol) -> Result<(), String> {
         let name = symbol.name.clone();
         if self.scopes[scope_idx].symbols.contains_key(&name) {
             return Err(format!(
                 "Duplicate declaration of '{}' in scope {:?}",
-                name,
-                self.scopes[scope_idx].kind
+                name, self.scopes[scope_idx].kind
             ));
         }
         self.scopes[scope_idx].symbols.insert(name, symbol);
@@ -160,9 +154,9 @@ impl ScopeTree {
             if let Some(symbol) = self.scopes[idx].symbols.get(name) {
                 return Some(symbol);
             }
-            match self.scopes[idx].parent {
-                Some(parent) => idx = parent,
-                None => return None,
+            {
+                let parent = self.scopes[idx].parent?;
+                idx = parent
             }
         }
     }
@@ -181,11 +175,7 @@ impl ScopeTree {
         result
     }
 
-    fn collect_symbols<'a>(
-        &'a self,
-        scope_idx: usize,
-        result: &mut Vec<&'a Symbol>,
-    ) {
+    fn collect_symbols<'a>(&'a self, scope_idx: usize, result: &mut Vec<&'a Symbol>) {
         for symbol in self.scopes[scope_idx].symbols.values() {
             result.push(symbol);
         }
@@ -358,12 +348,9 @@ impl Visitor for ScopeTreeBuilder {
     fn visit_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::If(s) => {
-                let if_scope = self.tree.add_scope(
-                    self.current_scope,
-                    ScopeKind::Block,
-                    None,
-                    Some(s.span),
-                );
+                let if_scope =
+                    self.tree
+                        .add_scope(self.current_scope, ScopeKind::Block, None, Some(s.span));
                 let parent = self.current_scope;
                 self.current_scope = if_scope;
 
@@ -406,12 +393,9 @@ impl Visitor for ScopeTreeBuilder {
                 }
             }
             Statement::While(s) => {
-                let scope = self.tree.add_scope(
-                    self.current_scope,
-                    ScopeKind::Block,
-                    None,
-                    Some(s.span),
-                );
+                let scope =
+                    self.tree
+                        .add_scope(self.current_scope, ScopeKind::Block, None, Some(s.span));
                 let parent = self.current_scope;
                 self.current_scope = scope;
 
@@ -422,12 +406,9 @@ impl Visitor for ScopeTreeBuilder {
                 self.current_scope = parent;
             }
             Statement::DoWhile(s) => {
-                let scope = self.tree.add_scope(
-                    self.current_scope,
-                    ScopeKind::Block,
-                    None,
-                    Some(s.span),
-                );
+                let scope =
+                    self.tree
+                        .add_scope(self.current_scope, ScopeKind::Block, None, Some(s.span));
                 let parent = self.current_scope;
                 self.current_scope = scope;
 
@@ -464,12 +445,9 @@ impl Visitor for ScopeTreeBuilder {
                 self.current_scope = parent;
             }
             Statement::Loop(s) => {
-                let scope = self.tree.add_scope(
-                    self.current_scope,
-                    ScopeKind::Block,
-                    None,
-                    Some(s.span),
-                );
+                let scope =
+                    self.tree
+                        .add_scope(self.current_scope, ScopeKind::Block, None, Some(s.span));
                 let parent = self.current_scope;
                 self.current_scope = scope;
 
@@ -563,8 +541,7 @@ mod tests {
 
     #[test]
     fn test_nested_scopes() {
-        let source =
-            "function test():\n\twhile true:\n\t\tif true:\n\t\t\tsend \"yes\"";
+        let source = "function test():\n\twhile true:\n\t\tif true:\n\t\t\tsend \"yes\"";
         let result = parse_program(source);
         let tree = ScopeTreeBuilder::new().build(&result.program);
         // Global(0) > Function(1) > Block-while(2) > Block-if(3)
@@ -578,8 +555,7 @@ mod tests {
 
     #[test]
     fn test_lookup_ancestor() {
-        let source =
-            "function test(name: text):\n\tif true:\n\t\tset x to name";
+        let source = "function test(name: text):\n\tif true:\n\t\tset x to name";
         let result = parse_program(source);
         let tree = ScopeTreeBuilder::new().build(&result.program);
         // block scope = index 2 (if body under function)
@@ -590,8 +566,7 @@ mod tests {
 
     #[test]
     fn test_lookup_local_only() {
-        let source =
-            "function test():\n\tset y to 10\n\tif true:\n\t\tset x to 5";
+        let source = "function test():\n\tset y to 10\n\tif true:\n\t\tset x to 5";
         let result = parse_program(source);
         let tree = ScopeTreeBuilder::new().build(&result.program);
         // function scope = 1, if block scope = 2
@@ -637,8 +612,7 @@ mod tests {
 
     #[test]
     fn test_for_in_loop_variable() {
-        let source =
-            "function test():\n\tfor each element in {_list}:\n\t\tsend element";
+        let source = "function test():\n\tfor each element in {_list}:\n\t\tsend element";
         let result = parse_program(source);
         let tree = ScopeTreeBuilder::new().build(&result.program);
         // Global(0) > Function(1) > Block(2)
@@ -653,8 +627,7 @@ mod tests {
 
     #[test]
     fn test_multiple_functions() {
-        let source =
-            "function a():\n\treturn\nfunction b():\n\treturn";
+        let source = "function a():\n\treturn\nfunction b():\n\treturn";
         let result = parse_program(source);
         let tree = ScopeTreeBuilder::new().build(&result.program);
         // Global(0) + Function-a(1) + Function-b(2)
@@ -713,8 +686,7 @@ mod tests {
 
     #[test]
     fn test_symbols_in_subtree() {
-        let source =
-            "function test(name: text):\n\tif true:\n\t\tset x to 5";
+        let source = "function test(name: text):\n\tif true:\n\t\tset x to 5";
         let result = parse_program(source);
         let tree = ScopeTreeBuilder::new().build(&result.program);
         // Collect all symbols from function scope (1) downward

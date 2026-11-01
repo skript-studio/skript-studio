@@ -1,7 +1,7 @@
+use super::expr::parse_expression;
+use super::Parser;
 use crate::ast::*;
 use crate::lexer::Token;
-use super::Parser;
-use super::expr::parse_expression;
 
 // ---------------------------------------------------------------------------
 // Span helper
@@ -31,9 +31,7 @@ fn span_of(expr: &Expression) -> Span {
 
 fn token_text(token: &Token) -> String {
     match token {
-        Token::Identifier(s) | Token::Number(s) | Token::String(s) | Token::StrText(s) => {
-            s.clone()
-        }
+        Token::Identifier(s) | Token::Number(s) | Token::String(s) | Token::StrText(s) => s.clone(),
         Token::Keyword(s) => s.to_string(),
         Token::Boolean(v) => v.to_string(),
         Token::Variable(parts) => format!("{{{}}}", parts.join("::")),
@@ -152,9 +150,7 @@ fn parse_if(parser: &mut Parser) -> Statement {
     })
 }
 
-fn parse_else_chain(
-    parser: &mut Parser,
-) -> (Vec<ElseIfStmt>, Option<Box<ElseStmt>>) {
+fn parse_else_chain(parser: &mut Parser) -> (Vec<ElseIfStmt>, Option<Box<ElseStmt>>) {
     let mut else_if_branches = Vec::new();
     let mut else_branch = None;
 
@@ -369,6 +365,10 @@ fn parse_assignment(parser: &mut Parser) -> Statement {
 
     let target = parse_assignment_target(parser);
 
+    // Both `to` and `=` map to `AssignmentOp::Equal`, but each branch must
+    // consume its own distinct token, so the bodies are intentionally the
+    // same while the side effects differ.
+    #[allow(clippy::if_same_then_else)]
     let operator = if parser.consume_if(&Token::Keyword("to")) {
         AssignmentOp::Equal
     } else if parser.consume_if(&Token::Equal) {
@@ -616,7 +616,10 @@ fn parse_wait(parser: &mut Parser) -> Statement {
         None
     };
 
-    let end = duration.as_ref().map(|e| span_of(e).end).unwrap_or(start.end);
+    let end = duration
+        .as_ref()
+        .map(|e| span_of(e).end)
+        .unwrap_or(start.end);
 
     Statement::Wait(WaitStmt {
         duration,
@@ -687,8 +690,7 @@ mod tests {
 
     #[test]
     fn test_parse_if_else() {
-        let source =
-            "if true:\n    broadcast \"hi\"\nelse:\n    broadcast \"bye\"";
+        let source = "if true:\n    broadcast \"hi\"\nelse:\n    broadcast \"bye\"";
         let (parser, stmt) = parse_stmt(source);
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 
@@ -739,7 +741,9 @@ mod tests {
 
         match stmt {
             Statement::If(IfStmt {
-                else_if, else_branch, ..
+                else_if,
+                else_branch,
+                ..
             }) => {
                 assert_eq!(else_if.len(), 2);
                 assert!(else_branch.is_some());
@@ -759,7 +763,9 @@ mod tests {
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 
         match stmt {
-            Statement::While(WhileStmt { condition, body, .. }) => {
+            Statement::While(WhileStmt {
+                condition, body, ..
+            }) => {
                 assert_eq!(body.len(), 1);
                 match condition {
                     Expression::Binary(_) => {}
@@ -795,7 +801,9 @@ mod tests {
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 
         match stmt {
-            Statement::Effect(EffectStmt { effect, arguments, .. }) => {
+            Statement::Effect(EffectStmt {
+                effect, arguments, ..
+            }) => {
                 assert_eq!(effect, "do");
                 assert_eq!(arguments.len(), 1);
             }
@@ -862,9 +870,7 @@ mod tests {
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 
         match stmt {
-            Statement::ForIn(ForInStmt {
-                variable, body, ..
-            }) => {
+            Statement::ForIn(ForInStmt { variable, body, .. }) => {
                 assert_eq!(variable, "player");
                 assert_eq!(body.len(), 1);
             }
@@ -1002,9 +1008,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "send");
                 assert_eq!(arguments.len(), 1);
@@ -1021,9 +1025,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "send");
                 assert_eq!(arguments.len(), 2);
@@ -1040,9 +1042,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "broadcast");
                 assert_eq!(arguments.len(), 1);
@@ -1063,9 +1063,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "add");
                 assert_eq!(arguments.len(), 2);
@@ -1082,9 +1080,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "remove");
                 assert_eq!(arguments.len(), 2);
@@ -1105,9 +1101,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "delete");
                 assert_eq!(arguments.len(), 1);
@@ -1123,9 +1117,7 @@ mod tests {
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 
         match stmt {
-            Statement::Effect(EffectStmt {
-                effect, ..
-            }) => {
+            Statement::Effect(EffectStmt { effect, .. }) => {
                 assert_eq!(effect, "clear");
             }
             other => panic!("expected Effect, got {:?}", other),
@@ -1140,9 +1132,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "give");
                 assert_eq!(arguments.len(), 2);
@@ -1176,9 +1166,7 @@ mod tests {
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 
         match stmt {
-            Statement::Return(ReturnStmt {
-                value, span, ..
-            }) => {
+            Statement::Return(ReturnStmt { value, span, .. }) => {
                 assert!(value.is_some());
                 assert!(span.start < span.end);
             }
@@ -1286,9 +1274,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "heal");
                 assert_eq!(arguments.len(), 1);
@@ -1305,9 +1291,7 @@ mod tests {
 
         match stmt {
             Statement::Effect(EffectStmt {
-                effect,
-                arguments,
-                ..
+                effect, arguments, ..
             }) => {
                 assert_eq!(effect, "someEffect");
                 assert_eq!(arguments.len(), 2);
@@ -1341,7 +1325,8 @@ mod tests {
 
     #[test]
     fn test_parse_nested_if() {
-        let source = "if true:\n    if false:\n        broadcast \"nested\"\n    broadcast \"outer\"";
+        let source =
+            "if true:\n    if false:\n        broadcast \"nested\"\n    broadcast \"outer\"";
         let (parser, stmt) = parse_stmt(source);
         assert!(parser.errors.is_empty(), "errors: {:?}", parser.errors);
 

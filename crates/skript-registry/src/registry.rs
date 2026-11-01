@@ -88,8 +88,7 @@ impl Registry {
         // NOTE: `vec![Vec::new(); entries.len()]` would require
         // `CompiledSyntax: Clone` (and thus `SkriptPattern: Clone`, which it
         // is not) — build the empty per-entry vecs via an iterator instead.
-        let compiled: Vec<Vec<CompiledSyntax>> =
-            (0..entries.len()).map(|_| Vec::new()).collect();
+        let compiled: Vec<Vec<CompiledSyntax>> = (0..entries.len()).map(|_| Vec::new()).collect();
 
         Ok(Registry {
             entries,
@@ -128,10 +127,7 @@ impl Registry {
     /// Entry indices registered under a `json_id` (may be several across
     /// addons — 462 duplicate json_ids exist in the corpus).
     pub fn by_json_id(&self, id: &str) -> &[usize] {
-        self.by_json_id
-            .get(id)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.by_json_id.get(id).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Entry indices belonging to an addon (case-insensitive match).
@@ -144,10 +140,7 @@ impl Registry {
 
     /// Entry indices for a syntax type.
     pub fn indices_for_type(&self, ty: &SyntaxType) -> &[usize] {
-        self.by_type
-            .get(ty)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.by_type.get(ty).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Compile every split pattern through `skript_patterns::compile_pattern`.
@@ -255,11 +248,7 @@ mod tests {
         }
 
         // 13661 split patterns across all entries (\r\n multi-patterns).
-        let split_total: usize = reg
-            .entries()
-            .iter()
-            .map(|e| e.split_patterns().len())
-            .sum();
+        let split_total: usize = reg.entries().iter().map(|e| e.split_patterns().len()).sum();
         assert_eq!(split_total, 13661);
 
         // Per-type counts (corpus stats from prepare_corpus.py).
@@ -280,7 +269,9 @@ mod tests {
         }
         // No `Other` types in this dump: every entry is indexed exactly once.
         assert_eq!(indexed_total, 8712);
-        assert!(reg.indices_for_type(&SyntaxType::Other("nope".into())).is_empty());
+        assert!(reg
+            .indices_for_type(&SyntaxType::Other("nope".into()))
+            .is_empty());
 
         // Nothing is compiled before compile_all.
         assert!(reg.failures().is_empty());
@@ -394,8 +385,8 @@ mod tests {
         let json = r#"[{"id": 7, "title": "Reload", "syntax_type": "effect",
             "syntax_pattern": "reload [the] (config|scripts)",
             "addon": {"name": "Skript"}}]"#;
-        let path = std::env::temp_dir()
-            .join(format!("skript-registry-test-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("skript-registry-test-{}.json", std::process::id()));
         std::fs::write(&path, json).expect("write temp file");
         let reg = Registry::from_path(&path).expect("from_path must succeed");
         assert_eq!(reg.entries().len(), 1);

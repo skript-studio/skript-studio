@@ -71,10 +71,13 @@ impl Parser {
 
     /// Return the current token without consuming it. Returns Eof at end of input.
     pub fn peek(&self) -> SpannedToken {
-        self.tokens.get(self.pos).cloned().unwrap_or_else(|| SpannedToken {
-            token: Token::Eof,
-            span: Span::new(0, 0),
-        })
+        self.tokens
+            .get(self.pos)
+            .cloned()
+            .unwrap_or_else(|| SpannedToken {
+                token: Token::Eof,
+                span: Span::new(0, 0),
+            })
     }
 
     /// Return the token kind of the current token without consuming it.
@@ -95,6 +98,7 @@ impl Parser {
     }
 
     /// Consume and return the current token. Panics at end of input.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> SpannedToken {
         if self.is_at_end() {
             panic!("called Parser::next at end of input");
@@ -300,7 +304,10 @@ mod tests {
     fn test_parse_errors_collected() {
         let source = "function foo():\n\t|\n\treturn";
         let result = parse_program(source);
-        assert!(!result.errors.is_empty(), "expected errors for invalid token inside body");
+        assert!(
+            !result.errors.is_empty(),
+            "expected errors for invalid token inside body"
+        );
         assert_eq!(result.program.items.len(), 1);
     }
 
@@ -349,15 +356,18 @@ mod fixture_tests {
 
     fn parse_fixture(name: &str) -> ParseResult {
         let path = fixture_path(name);
-        let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("failed to read {name}: {e}"));
+        let content =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {name}: {e}"));
         parse_program(&content)
     }
 
     #[test]
     fn test_parse_functions_sk() {
         let result = parse_fixture("functions.sk");
-        assert!(!result.program.items.is_empty(), "expected items in functions.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in functions.sk"
+        );
         let has_func = result
             .program
             .items
@@ -369,7 +379,10 @@ mod fixture_tests {
     #[test]
     fn test_parse_events_sk() {
         let result = parse_fixture("events.sk");
-        assert!(!result.program.items.is_empty(), "expected items in events.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in events.sk"
+        );
         let has_cmd = result
             .program
             .items
@@ -381,42 +394,63 @@ mod fixture_tests {
     #[test]
     fn test_parse_commands_sk() {
         let result = parse_fixture("commands.sk");
-        assert!(!result.program.items.is_empty(), "expected items in commands.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in commands.sk"
+        );
     }
 
     #[test]
     fn test_parse_loops_sk() {
         let result = parse_fixture("loops.sk");
-        assert!(!result.program.items.is_empty(), "expected items in loops.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in loops.sk"
+        );
     }
 
     #[test]
     fn test_parse_variables_sk() {
         let result = parse_fixture("variables.sk");
-        assert!(!result.program.items.is_empty(), "expected items in variables.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in variables.sk"
+        );
     }
 
     #[test]
     fn test_parse_options_meta_sk() {
         let result = parse_fixture("options and meta.sk");
-        assert!(!result.program.items.is_empty(), "expected items in options and meta.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in options and meta.sk"
+        );
     }
 
     #[test]
     fn test_parse_chest_menus_sk() {
         let result = parse_fixture("chest menus.sk");
-        assert!(!result.program.items.is_empty(), "expected items in chest menus.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in chest menus.sk"
+        );
     }
 
     #[test]
     fn test_parse_text_formatting_sk() {
         let result = parse_fixture("text formatting.sk");
-        assert!(!result.program.items.is_empty(), "expected items in text formatting.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in text formatting.sk"
+        );
     }
 
     #[test]
     fn test_parse_timings_sk() {
         let result = parse_fixture("timings.sk");
-        assert!(!result.program.items.is_empty(), "expected items in timings.sk");
+        assert!(
+            !result.program.items.is_empty(),
+            "expected items in timings.sk"
+        );
     }
 }

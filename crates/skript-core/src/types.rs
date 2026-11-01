@@ -60,7 +60,9 @@ fn check_single_type(ty: &str, value: &str) -> TypeCheck {
         "text" | "string" => check_text(value),
         // Player/entity-ish: identifiers, quoted names, or variables.
         "player" | "offlineplayer" | "commandsender" | "human" | "humanentity" => check_name(value),
-        "entity" | "entitydata" | "entitytype" | "entitytypes" | "livingentity" => check_name(value),
+        "entity" | "entitydata" | "entitytype" | "entitytypes" | "livingentity" => {
+            check_name(value)
+        }
         "location" => check_location(value),
         // Everything else (item, world, material, ...) is too permissive to
         // constrain; accept anything non-empty.
@@ -85,12 +87,7 @@ fn normalize_type_name(ty: &str) -> String {
 
 fn check_number(value: &str) -> TypeCheck {
     // Accept plain numerics, signed, with optional decimal/exponent.
-    if value
-        .trim()
-        .parse::<f64>()
-        .is_ok()
-        || number_expr_regex().is_match(value.trim())
-    {
+    if value.trim().parse::<f64>().is_ok() || number_expr_regex().is_match(value.trim()) {
         TypeCheck::Ok
     } else {
         TypeCheck::Mismatch(format!("{value:?} is not a number"))
@@ -108,9 +105,7 @@ fn check_boolean(value: &str) -> TypeCheck {
 fn check_text(value: &str) -> TypeCheck {
     // Quoted strings must be balanced; bare text is always acceptable as text.
     let t = value.trim();
-    if (t.starts_with('"') && !t.ends_with('"'))
-        || (t.starts_with("''") && !t.ends_with("''"))
-    {
+    if (t.starts_with('"') && !t.ends_with('"')) || (t.starts_with("''") && !t.ends_with("''")) {
         return TypeCheck::Mismatch("unterminated string literal".to_owned());
     }
     TypeCheck::Ok
@@ -127,7 +122,9 @@ fn check_name(value: &str) -> TypeCheck {
     {
         TypeCheck::Ok
     } else {
-        TypeCheck::Mismatch(format!("{value:?} does not look like an identifier or variable"))
+        TypeCheck::Mismatch(format!(
+            "{value:?} does not look like an identifier or variable"
+        ))
     }
 }
 
@@ -179,14 +176,20 @@ mod tests {
         assert_eq!(check_type("number", "42"), TypeCheck::Ok);
         assert_eq!(check_type("number", "-3.14"), TypeCheck::Ok);
         assert_eq!(check_type("number", "1e10"), TypeCheck::Ok);
-        assert!(matches!(check_type("number", "Steve"), TypeCheck::Mismatch(_)));
+        assert!(matches!(
+            check_type("number", "Steve"),
+            TypeCheck::Mismatch(_)
+        ));
     }
 
     #[test]
     fn booleans_validate() {
         assert_eq!(check_type("boolean", "true"), TypeCheck::Ok);
         assert_eq!(check_type("boolean", "no"), TypeCheck::Ok);
-        assert!(matches!(check_type("boolean", "maybe"), TypeCheck::Mismatch(_)));
+        assert!(matches!(
+            check_type("boolean", "maybe"),
+            TypeCheck::Mismatch(_)
+        ));
     }
 
     #[test]
@@ -216,12 +219,18 @@ mod tests {
 
     #[test]
     fn unterminated_string_is_mismatch_for_text() {
-        assert!(matches!(check_type("text", "\"oops"), TypeCheck::Mismatch(_)));
+        assert!(matches!(
+            check_type("text", "\"oops"),
+            TypeCheck::Mismatch(_)
+        ));
         assert_eq!(check_type("text", "\"fine\""), TypeCheck::Ok);
     }
 
     #[test]
     fn empty_value_is_mismatch() {
-        assert!(matches!(check_type("number", "   "), TypeCheck::Mismatch(_)));
+        assert!(matches!(
+            check_type("number", "   "),
+            TypeCheck::Mismatch(_)
+        ));
     }
 }

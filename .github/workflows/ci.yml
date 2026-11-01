@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
 
 jobs:
   rust:
@@ -32,26 +33,21 @@ jobs:
           restore-keys: |
             linux-cargo-
 
-      - name: Install Bun (for SkriptHub cache generation)
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Generate SkriptHub cache
         working-directory: extensions/vscode-skript
-        run: bun run download-cache
+        run: curl -s https://skripthub.net/api/v1/addonsyntaxlist/ | node normalize-cache.mjs
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo check
         run: cargo check --workspace --all-targets
 
       - name: cargo test
         run: cargo test --workspace --all-targets
-
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets
-
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
 
   vscode-extension:
     name: VSCode extension

@@ -204,10 +204,7 @@ pub struct EntryTable {
 
 impl EntryTable {
     pub fn from_entries(entries: Vec<SyntaxEntry>) -> Self {
-        let by_id = entries
-            .into_iter()
-            .map(|e| (e.id, Arc::new(e)))
-            .collect();
+        let by_id = entries.into_iter().map(|e| (e.id, Arc::new(e))).collect();
         EntryTable { by_id }
     }
 
@@ -268,7 +265,10 @@ mod tests {
         let matches = index.matches(r#"send "hello" to Steve"#);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].entry_id, 1);
-        assert!(matches[0].type_checks.iter().all(|c| matches!(c, TypeCheck::Ok)));
+        assert!(matches[0]
+            .type_checks
+            .iter()
+            .all(|c| matches!(c, TypeCheck::Ok)));
     }
 
     #[test]

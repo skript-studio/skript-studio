@@ -102,16 +102,24 @@ fn line_diagnostic_mapping_matches_contract() {
         })
         .severity
     };
-    assert_eq!(sev(skript_checks::Severity::Error), Some(DiagnosticSeverity::ERROR));
-    assert_eq!(sev(skript_checks::Severity::Info), Some(DiagnosticSeverity::INFORMATION));
+    assert_eq!(
+        sev(skript_checks::Severity::Error),
+        Some(DiagnosticSeverity::ERROR)
+    );
+    assert_eq!(
+        sev(skript_checks::Severity::Info),
+        Some(DiagnosticSeverity::INFORMATION)
+    );
 }
 
 /// `CheckConfig` is built from `EffectiveConfig`; versions stay `None`.
 #[test]
 fn check_config_built_from_effective_config() {
-    let mut cfg = EffectiveConfig::default();
-    cfg.enabled_addons = vec!["SkBee".to_owned()];
-    cfg.installed_plugins = vec!["Vault".to_owned()];
+    let cfg = EffectiveConfig {
+        enabled_addons: vec!["SkBee".to_owned()],
+        installed_plugins: vec!["Vault".to_owned()],
+        ..Default::default()
+    };
     let cc = skript_lsp::backend::build_check_config(&cfg);
 
     assert!(cc.enabled_addons.contains("SkBee"));
@@ -145,7 +153,11 @@ fn ensure_java_engine_builds_embedded_registry() {
     // Corpus facts (PORTING_CONTRACTS.md): 8712 entries, 13661 split
     // patterns. Assert the contract's lower bound plus the compile
     // invariant rather than exact counts where reasonable.
-    assert!(stats.entries > 8000, "expected a large corpus, got {}", stats.entries);
+    assert!(
+        stats.entries > 8000,
+        "expected a large corpus, got {}",
+        stats.entries
+    );
     assert_eq!(
         stats.patterns_compiled + stats.compile_failures,
         13661,

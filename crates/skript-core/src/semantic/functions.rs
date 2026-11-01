@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Expression, FunctionDecl, Program, Span, TopLevelItem, Visitor,
-    walk_expression, walk_top_level_item, walk_program,
+    walk_expression, walk_program, walk_top_level_item, Expression, FunctionDecl, Program, Span,
+    TopLevelItem, Visitor,
 };
 
 /// A registered function declaration with metadata about its calls.
@@ -206,7 +206,9 @@ mod tests {
         let result = parse_program(source);
         let registry = FunctionRegistryBuilder::new().build(&result.program);
 
-        let info = registry.get("greet").expect("function should be registered");
+        let info = registry
+            .get("greet")
+            .expect("function should be registered");
         assert_eq!(info.name, "greet");
         assert_eq!(info.parameter_count, 1);
         assert!(!info.has_return_type);
@@ -218,7 +220,10 @@ mod tests {
         let result = parse_program(source);
         let registry = FunctionRegistryBuilder::new().build(&result.program);
 
-        assert!(!registry.errors.is_empty(), "duplicate should produce error");
+        assert!(
+            !registry.errors.is_empty(),
+            "duplicate should produce error"
+        );
         let dups = registry.check_duplicates();
         assert!(!dups.is_empty());
         assert!(dups[0].message.contains("Duplicate"));
@@ -243,8 +248,14 @@ mod tests {
 
         registry.record_call("greet", 1, Span::new(0, 0));
         let errors = registry.validate_calls();
-        let undeclared: Vec<_> = errors.iter().filter(|e| e.message.contains("undeclared")).collect();
-        assert!(undeclared.is_empty(), "greet is declared, call with 1 arg should be valid");
+        let undeclared: Vec<_> = errors
+            .iter()
+            .filter(|e| e.message.contains("undeclared"))
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "greet is declared, call with 1 arg should be valid"
+        );
     }
 
     #[test]
@@ -255,9 +266,14 @@ mod tests {
 
         registry.record_call("greet", 3, Span::new(0, 1));
         let errors = registry.validate_calls();
-        let arg_errors: Vec<_> = errors.iter().filter(|e| e.message.contains("expects")).collect();
+        let arg_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.message.contains("expects"))
+            .collect();
         assert_eq!(arg_errors.len(), 1);
-        assert!(arg_errors[0].message.contains("expects 1 arguments but got 3"));
+        assert!(arg_errors[0]
+            .message
+            .contains("expects 1 arguments but got 3"));
     }
 
     #[test]

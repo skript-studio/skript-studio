@@ -67,7 +67,11 @@ fn render(entry: &SyntaxEntry) -> String {
         }
     }
     if !entry.required_plugins.is_empty() {
-        let names: Vec<&str> = entry.required_plugins.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = entry
+            .required_plugins
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         md.push_str(&format!("- **Requires:** {}\n", names.join(", ")));
     }
     if entry.mark_as_removed {
@@ -94,8 +98,8 @@ fn capitalize(s: &str) -> String {
 
 use crate::ast::{node_at_offset, NodeRef, Program, Span, TopLevelItem};
 use crate::completion::linecol_to_offset;
-use crate::semantic::SemanticAnalysis;
 use crate::semantic::types::TypeInfo;
+use crate::semantic::SemanticAnalysis;
 use crate::validation::offset_to_linecol;
 
 /// AST-resolved hover info: variable declaration, function definition, type info.
@@ -137,23 +141,32 @@ pub fn hover_at_ast(
 
             let mut md = format!("**{{{}}}** — {}\n\n", var_name, symbol.kind.describe());
             let (_, decl_line, decl_col) = span_to_linecol(source, symbol.declared_at);
-            md.push_str(&format!("Declared at line {}, column {}", decl_line + 1, decl_col + 1));
+            md.push_str(&format!(
+                "Declared at line {}, column {}",
+                decl_line + 1,
+                decl_col + 1
+            ));
 
             let span_start = expr_span_start(expr);
-            match analysis.type_inference.get_type(span_start) {
-                TypeInfo::Known(ty) => {
-                    md.push_str(&format!("\n\nType: {}", ty));
-                }
-                _ => {}
+            if let TypeInfo::Known(ty) = analysis.type_inference.get_type(span_start) {
+                md.push_str(&format!("\n\nType: {}", ty));
             }
 
-            Some(AstHoverInfo { markdown: md, range })
+            Some(AstHoverInfo {
+                markdown: md,
+                range,
+            })
         }
         NodeRef::FunctionCall(expr) => {
             let func_name = extract_func_name(expr)?;
             let func = analysis.function_registry.get(func_name)?;
 
-            let params: Vec<&str> = func.decl.parameters.iter().map(|p| p.name.as_str()).collect();
+            let params: Vec<&str> = func
+                .decl
+                .parameters
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect();
             let sig = params.join(", ");
 
             let mut md = format!("**{}**\n\n", func_name);
@@ -169,7 +182,10 @@ pub fn hover_at_ast(
                 }
             }
 
-            Some(AstHoverInfo { markdown: md, range })
+            Some(AstHoverInfo {
+                markdown: md,
+                range,
+            })
         }
         NodeRef::FunctionDecl(item) => {
             let fd = match item {
@@ -183,14 +199,20 @@ pub fn hover_at_ast(
             if let Some(ref rt) = fd.return_type {
                 md.push_str(&format!("- **Returns:** {}\n", rt.name));
             }
-            Some(AstHoverInfo { markdown: md, range })
+            Some(AstHoverInfo {
+                markdown: md,
+                range,
+            })
         }
         NodeRef::BinaryExpr(expr) => {
             let span_start = expr_span_start(expr);
             match analysis.type_inference.get_type(span_start) {
                 TypeInfo::Known(ty) => {
                     let md = format!("Expression type: `{}`", ty);
-                    Some(AstHoverInfo { markdown: md, range })
+                    Some(AstHoverInfo {
+                        markdown: md,
+                        range,
+                    })
                 }
                 _ => None,
             }
@@ -200,7 +222,10 @@ pub fn hover_at_ast(
             match analysis.type_inference.get_type(span_start) {
                 TypeInfo::Known(ty) => {
                     let md = format!("Type: `{}`", ty);
-                    Some(AstHoverInfo { markdown: md, range })
+                    Some(AstHoverInfo {
+                        markdown: md,
+                        range,
+                    })
                 }
                 _ => None,
             }
@@ -210,7 +235,10 @@ pub fn hover_at_ast(
             match analysis.type_inference.get_type(span_start) {
                 TypeInfo::Known(ty) => {
                     let md = format!("Type: `{}`", ty);
-                    Some(AstHoverInfo { markdown: md, range })
+                    Some(AstHoverInfo {
+                        markdown: md,
+                        range,
+                    })
                 }
                 _ => None,
             }
@@ -341,8 +369,14 @@ mod tests {
         let result = hover_at_ast(source, 2, 12, &parse_result.program, &analysis);
         assert!(result.is_some(), "should resolve hover for {{_x}}");
         let info = result.unwrap();
-        assert!(info.markdown.contains("_x"), "markdown should contain var name");
-        assert!(info.markdown.contains("Declared at"), "markdown should show declaration");
+        assert!(
+            info.markdown.contains("_x"),
+            "markdown should contain var name"
+        );
+        assert!(
+            info.markdown.contains("Declared at"),
+            "markdown should show declaration"
+        );
     }
 
     #[test]
@@ -354,8 +388,14 @@ mod tests {
         let result = hover_at_ast(source, 1, 8, &parse_result.program, &analysis);
         assert!(result.is_some(), "should resolve hover for test() call");
         let info = result.unwrap();
-        assert!(info.markdown.contains("test"), "markdown should contain function name");
-        assert!(info.markdown.contains("function"), "markdown should show 'function'");
+        assert!(
+            info.markdown.contains("test"),
+            "markdown should contain function name"
+        );
+        assert!(
+            info.markdown.contains("function"),
+            "markdown should show 'function'"
+        );
     }
 
     #[test]
@@ -369,7 +409,10 @@ mod tests {
         let result = hover_at_ast(source, 1, 13, &parse_result.program, &analysis);
         assert!(result.is_some(), "should resolve hover for string literal");
         let info = result.unwrap();
-        assert!(info.markdown.contains("text"), "literal type should be 'text'");
+        assert!(
+            info.markdown.contains("text"),
+            "literal type should be 'text'"
+        );
     }
 
     #[test]
@@ -379,6 +422,9 @@ mod tests {
         let analysis = crate::semantic::analyze(&parse_result.program);
         // Hover over `send` keyword — effect statements return None (falls through to syntax)
         let result = hover_at_ast(source, 1, 1, &parse_result.program, &analysis);
-        assert!(result.is_none(), "hover over keyword should be None (falls through to syntax)");
+        assert!(
+            result.is_none(),
+            "hover over keyword should be None (falls through to syntax)"
+        );
     }
 }

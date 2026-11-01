@@ -1140,9 +1140,12 @@ fn stmt_node_at_offset<'a>(stmt: &'a Statement, offset: usize) -> Option<NodeRef
         }
         Statement::Expression(expr) => expr_node_at_offset(expr, offset),
         // Leaf statements with no expressions
-        Statement::Stop(_) | Statement::Exit(_)
-        | Statement::Continue(_) | Statement::CancelEvent(_)
-        | Statement::BlankLine | Statement::Comment(_) => None,
+        Statement::Stop(_)
+        | Statement::Exit(_)
+        | Statement::Continue(_)
+        | Statement::CancelEvent(_)
+        | Statement::BlankLine
+        | Statement::Comment(_) => None,
     }
 }
 
@@ -1302,16 +1305,28 @@ mod tests {
 
     #[test]
     fn test_literal_display() {
-        let n = Literal::Number(NumberLiteral { value: "42".into(), span: Span::new(0, 2) });
+        let n = Literal::Number(NumberLiteral {
+            value: "42".into(),
+            span: Span::new(0, 2),
+        });
         assert_eq!(n.to_string(), "42");
 
-        let s = Literal::String(StringLiteral { value: "hello".into(), span: Span::new(0, 7) });
+        let s = Literal::String(StringLiteral {
+            value: "hello".into(),
+            span: Span::new(0, 7),
+        });
         assert_eq!(s.to_string(), "\"hello\"");
 
-        let bt = Literal::Boolean(BooleanLiteral { value: true, span: Span::new(0, 4) });
+        let bt = Literal::Boolean(BooleanLiteral {
+            value: true,
+            span: Span::new(0, 4),
+        });
         assert_eq!(bt.to_string(), "true");
 
-        let bf = Literal::Boolean(BooleanLiteral { value: false, span: Span::new(0, 5) });
+        let bf = Literal::Boolean(BooleanLiteral {
+            value: false,
+            span: Span::new(0, 5),
+        });
         assert_eq!(bf.to_string(), "false");
     }
 
@@ -1722,7 +1737,10 @@ mod tests {
                     return_type: None,
                     body: vec![
                         Statement::Expression(Expression::Literal(Literal::Number(
-                            NumberLiteral { value: "1".into(), span: s },
+                            NumberLiteral {
+                                value: "1".into(),
+                                span: s,
+                            },
                         ))),
                         Statement::Return(ReturnStmt {
                             value: Some(Expression::Variable(Variable {
@@ -1743,15 +1761,14 @@ mod tests {
                         span: s,
                     }],
                     metadata: CommandMetadata::default(),
-                    body: vec![
-                        Statement::Effect(EffectStmt {
-                            effect: "send".into(),
-                            arguments: vec![Expression::Literal(Literal::String(
-                                StringLiteral { value: "hi".into(), span: s },
-                            ))],
+                    body: vec![Statement::Effect(EffectStmt {
+                        effect: "send".into(),
+                        arguments: vec![Expression::Literal(Literal::String(StringLiteral {
+                            value: "hi".into(),
                             span: s,
-                        }),
-                    ],
+                        }))],
+                        span: s,
+                    })],
                     span: s,
                 }),
                 TopLevelItem::Comment(Comment {
@@ -1767,7 +1784,10 @@ mod tests {
 
         assert_eq!(visitor.program_count, 1, "should visit program once");
         assert_eq!(visitor.top_level_count, 4, "4 top-level items");
-        assert_eq!(visitor.statement_count, 3, "2 statements in func + 1 effect in cmd");
+        assert_eq!(
+            visitor.statement_count, 3,
+            "2 statements in func + 1 effect in cmd"
+        );
         assert_eq!(visitor.expression_count, 3, "num(1) + var(x) + string(hi)");
         assert_eq!(visitor.parameter_count, 1, "1 parameter");
         assert_eq!(visitor.command_arg_count, 1, "1 command arg");

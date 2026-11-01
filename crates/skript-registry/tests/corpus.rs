@@ -14,7 +14,7 @@
 use std::rc::Rc;
 
 use skript_patterns::{
-    ParseContext, ParseFlags, PermissiveResolver, compile_pattern, set_type_resolver,
+    compile_pattern, set_type_resolver, ParseContext, ParseFlags, PermissiveResolver,
 };
 use skript_registry::{Registry, SyntaxType};
 
@@ -39,11 +39,7 @@ fn corpus_shape() {
     assert_eq!(reg.indices_for_type(&SyntaxType::Type).len(), 660);
 
     // 13661 split patterns across all entries (\r\n multi-patterns).
-    let split_total: usize = reg
-        .entries()
-        .iter()
-        .map(|e| e.split_patterns().len())
-        .sum();
+    let split_total: usize = reg.entries().iter().map(|e| e.split_patterns().len()).sum();
     assert_eq!(split_total, 13661);
 }
 

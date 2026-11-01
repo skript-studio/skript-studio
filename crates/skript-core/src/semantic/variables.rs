@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignmentTarget, Expression, Program, Span, Statement, TopLevelItem, Visitor,
-    walk_expression, walk_top_level_item,
+    walk_expression, walk_top_level_item, AssignmentTarget, Expression, Program, Span, Statement,
+    TopLevelItem, Visitor,
 };
 
 /// Determine whether a variable name refers to a local variable.
@@ -229,12 +229,10 @@ impl VariableTrackerBuilder {
         });
         // Find the latest matching declaration visible from this scope
         // using indices to avoid mutable+immutable borrow conflict.
-        let decl_idx = (0..self.tracker.declarations.len())
-            .rev()
-            .find(|&i| {
-                let d = &self.tracker.declarations[i];
-                d.name == name && self.is_ancestor_or_equal(d.scope_idx, current)
-            });
+        let decl_idx = (0..self.tracker.declarations.len()).rev().find(|&i| {
+            let d = &self.tracker.declarations[i];
+            d.name == name && self.is_ancestor_or_equal(d.scope_idx, current)
+        });
         if let Some(di) = decl_idx {
             self.tracker.declarations[di].usages.push(idx);
         }
@@ -486,7 +484,10 @@ mod tests {
             .find(|d| d.name == "element")
             .expect("loop variable should be declared");
         assert_eq!(loop_decl.kind, VarKind::LoopVar);
-        assert!(!loop_decl.usages.is_empty(), "loop variable should have usages");
+        assert!(
+            !loop_decl.usages.is_empty(),
+            "loop variable should have usages"
+        );
     }
 
     #[test]

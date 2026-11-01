@@ -24,10 +24,10 @@
 use crate::options::EffectiveConfig;
 use include_dir::{include_dir, Dir};
 use skript_core::matching::{EntryTable, SyntaxIndex};
+use skript_core::parse_program;
 use skript_core::parser::incremental::incremental_update;
 use skript_core::parser::ParseResult;
 use skript_core::semantic::{analyze, SemanticAnalysis};
-use skript_core::parse_program;
 use skript_core::SyntaxEntry;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,14 +45,20 @@ impl DocumentSnapshot {
     pub fn new(source: &str) -> Self {
         let parse_result = parse_program(source);
         let analysis = analyze(&parse_result.program);
-        DocumentSnapshot { parse_result, analysis }
+        DocumentSnapshot {
+            parse_result,
+            analysis,
+        }
     }
 
     /// Incrementally update from a previous snapshot.
     pub fn update(old_source: &str, new_source: &str, old: &DocumentSnapshot) -> Self {
         let parse_result = incremental_update(old_source, new_source, &old.parse_result.program);
         let analysis = analyze(&parse_result.program);
-        DocumentSnapshot { parse_result, analysis }
+        DocumentSnapshot {
+            parse_result,
+            analysis,
+        }
     }
 }
 
@@ -183,10 +189,13 @@ impl AppState {
 
     pub fn open_doc(&self, uri: String, text: String) {
         let snapshot = DocumentSnapshot::new(&text);
-        self.inner.docs.insert(uri, DocEntry {
-            text,
-            snapshot: Some(snapshot),
-        });
+        self.inner.docs.insert(
+            uri,
+            DocEntry {
+                text,
+                snapshot: Some(snapshot),
+            },
+        );
     }
 
     pub fn update_doc(&self, uri: &str, new_text: String) {
@@ -202,10 +211,13 @@ impl AppState {
             }
         } else {
             let snapshot = DocumentSnapshot::new(&new_text);
-            self.inner.docs.insert(uri.to_owned(), DocEntry {
-                text: new_text,
-                snapshot: Some(snapshot),
-            });
+            self.inner.docs.insert(
+                uri.to_owned(),
+                DocEntry {
+                    text: new_text,
+                    snapshot: Some(snapshot),
+                },
+            );
         }
     }
 
@@ -219,9 +231,10 @@ impl AppState {
 
     /// Access the cached snapshot for a document.
     pub fn with_snapshot<R>(&self, uri: &str, f: impl FnOnce(&DocumentSnapshot) -> R) -> Option<R> {
-        self.inner.docs.get(uri).and_then(|entry| {
-            entry.snapshot.as_ref().map(|snap| f(snap))
-        })
+        self.inner
+            .docs
+            .get(uri)
+            .and_then(|entry| entry.snapshot.as_ref().map(f))
     }
 
     /// URIs of all currently open documents. Useful for re-publishing
@@ -273,7 +286,10 @@ impl AppState {
         if entries.is_empty() {
             tracing::warn!("no syntax entries loaded — server will be empty");
         } else {
-            tracing::info!(count = entries.len(), "loaded syntax entries from addon cache");
+            tracing::info!(
+                count = entries.len(),
+                "loaded syntax entries from addon cache"
+            );
         }
 
         self.install(entries);
@@ -351,11 +367,10 @@ impl AppState {
                         // waiters wake up and parked `java_check` replies
                         // resolve (their oneshot senders drop together with
                         // the request channel) instead of hanging.
-                        let outcome = std::panic::catch_unwind(
-                            std::panic::AssertUnwindSafe(move || {
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                                 java_engine_thread_main(engine_state, rx);
-                            }),
-                        );
+                            }));
                         if outcome.is_err() {
                             tracing::error!(
                                 "java engine thread panicked; \
@@ -542,9 +557,7 @@ fn java_engine_thread_main(
             Some(reg) => {
                 // Defensive re-install (idempotent): matching must find the
                 // resolver on this thread.
-                skript_patterns::set_type_resolver(
-                    Rc::new(skript_patterns::PermissiveResolver),
-                );
+                skript_patterns::set_type_resolver(Rc::new(skript_patterns::PermissiveResolver));
                 JavaCheckReply::Diagnostics(skript_checks::check_document(
                     &request.text,
                     reg,
@@ -590,9 +603,7 @@ mod tests {
     fn install_makes_state_ready_and_queryable() {
         let state = AppState::new(EffectiveConfig::default());
         assert!(!state.ready());
-        assert!(state
-            .with_index(|_, _| ())
-            .is_none());
+        assert!(state.with_index(|_, _| ()).is_none());
 
         state.install(sample_entries());
         assert!(state.ready());
@@ -634,7 +645,10 @@ mod tests {
         let addons = loaded_addons(&["SkBee".to_owned()]);
         assert!(addons.contains("Skript"));
         assert!(addons.contains("SkBee"));
-        assert!(!addons.contains("SkQuery"), "unrequested addon must be filtered out");
+        assert!(
+            !addons.contains("SkQuery"),
+            "unrequested addon must be filtered out"
+        );
     }
 
     #[test]

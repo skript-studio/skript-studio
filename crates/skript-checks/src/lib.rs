@@ -14,9 +14,9 @@
 //! Rules (code -> severity, in priority order — at most ONE per line):
 //!  - `unparseable`          Error   — no pattern of any matching syntax type fits
 //!  - `addon-not-enabled`    Warning — only fits patterns from addons not in
-//!                                     `config.enabled_addons` (when non-empty)
+//!    `config.enabled_addons` (when non-empty)
 //!  - `plugin-missing`       Warning — matching entry requires plugins not in
-//!                                     `config.installed_plugins`
+//!    `config.installed_plugins`
 //!  - `ambiguous-addon`      Info    — matches entries from >= 2 different addons
 //!
 //! # Heuristics (documented divergences / approximations)
@@ -110,7 +110,9 @@ pub fn check_document(
     let addon_count = distinct_addon_count(registry);
     let mut out = Vec::new();
     for (line_no, raw) in text.lines().enumerate() {
-        let Some(analyzed) = analyze_line(raw) else { continue };
+        let Some(analyzed) = analyze_line(raw) else {
+            continue;
+        };
         let matches = collect_matches(&analyzed.stripped, analyzed.kind.candidates(), registry);
         if let Some(d) = evaluate_matches(
             line_no,
@@ -360,9 +362,9 @@ fn evaluate_matches(
     // an addon outside the user's enabled set (only checked when the set
     // is non-empty; an empty set means "all addons enabled"). ----
     if !config.enabled_addons.is_empty()
-        && matches.iter().all(|m| {
-            !addon_enabled(&registry.entries()[m.entry_index].addon.name, config)
-        })
+        && matches
+            .iter()
+            .all(|m| !addon_enabled(&registry.entries()[m.entry_index].addon.name, config))
     {
         let addons = matched_addon_names(matches, registry);
         return Some(LineDiagnostic {
@@ -613,7 +615,7 @@ mod tests {
     use std::collections::HashSet;
     use std::rc::Rc;
 
-    use skript_patterns::{PermissiveResolver, set_type_resolver};
+    use skript_patterns::{set_type_resolver, PermissiveResolver};
 
     /// Tiny inline registry (un-compiled — `compile_all` needs the pattern
     /// compiler from Agent 5, so un-gated tests never call it).
@@ -683,17 +685,7 @@ mod tests {
                 pattern_index: 0,
             })
             .collect();
-        evaluate_matches(
-            7,
-            2,
-            30,
-            stripped,
-            kind,
-            &matches,
-            registry,
-            config,
-            3,
-        )
+        evaluate_matches(7, 2, 30, stripped, kind, &matches, registry, config, 3)
     }
 
     // ------------------------------------------------------------------
@@ -785,7 +777,10 @@ mod tests {
     fn strip_inline_comment_is_quote_aware() {
         assert_eq!(strip_inline_comment("no comment"), "no comment");
         assert_eq!(strip_inline_comment("# lead"), "");
-        assert_eq!(strip_inline_comment("broadcast \"a # b\" # c"), "broadcast \"a # b\" ");
+        assert_eq!(
+            strip_inline_comment("broadcast \"a # b\" # c"),
+            "broadcast \"a # b\" "
+        );
         // Unterminated string: the '#' stays inside the quote.
         assert_eq!(
             strip_inline_comment("\"unterminated # still string"),
@@ -793,7 +788,10 @@ mod tests {
         );
         // Doubled quotes ("" = literal quote in Skript) keep the scanner
         // balanced.
-        assert_eq!(strip_inline_comment("say \"\"hi\"\" # done"), "say \"\"hi\"\" ");
+        assert_eq!(
+            strip_inline_comment("say \"\"hi\"\" # done"),
+            "say \"\"hi\"\" "
+        );
     }
 
     // ------------------------------------------------------------------
@@ -805,13 +803,25 @@ mod tests {
         let reg = mini_registry();
         let eff = [SyntaxType::Effect];
 
-        assert_eq!(closest_hints("detonate all creepers", &eff, &reg, 3), ["Detonate"]);
-        assert_eq!(closest_hints("play sounds to everyone", &eff, &reg, 3), ["Play Sound"]);
+        assert_eq!(
+            closest_hints("detonate all creepers", &eff, &reg, 3),
+            ["Detonate"]
+        );
+        assert_eq!(
+            closest_hints("play sounds to everyone", &eff, &reg, 3),
+            ["Play Sound"]
+        );
         // "despawn citizen" shares TWO leading words with Despawn Citizen.
-        assert_eq!(closest_hints("despawn citizen", &eff, &reg, 3), ["Despawn Citizen"]);
+        assert_eq!(
+            closest_hints("despawn citizen", &eff, &reg, 3),
+            ["Despawn Citizen"]
+        );
 
         // Two Kill entries tie on prefix length; stable registry order.
-        assert_eq!(closest_hints("kill everything", &eff, &reg, 3), ["Kill", "Kill Entities"]);
+        assert_eq!(
+            closest_hints("kill everything", &eff, &reg, 3),
+            ["Kill", "Kill Entities"]
+        );
 
         // The prefix must start at the FIRST word.
         assert!(closest_hints("please detonate stuff", &eff, &reg, 3).is_empty());
@@ -823,13 +833,20 @@ mod tests {
         assert_eq!(closest_hints("on join", &evt, &reg, 3), ["On Join"]);
 
         // Heads: the section candidate set includes Loop.
-        let head = [SyntaxType::Section, SyntaxType::Structure, SyntaxType::Condition];
+        let head = [
+            SyntaxType::Section,
+            SyntaxType::Structure,
+            SyntaxType::Condition,
+        ];
         assert_eq!(closest_hints("loop all players", &head, &reg, 3), ["Loop"]);
     }
 
     #[test]
     fn join_limited_appends_and_more() {
-        let items: Vec<String> = ["a", "b", "c", "d", "e"].iter().map(|s| s.to_string()).collect();
+        let items: Vec<String> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(join_limited(&items, 3), "a, b, c (and 2 more)");
         assert_eq!(join_limited(&items, 5), "a, b, c, d, e");
         let two: Vec<String> = ["x", "y"].iter().map(|s| s.to_string()).collect();
@@ -871,9 +888,15 @@ mod tests {
         );
         // Kind names: event / section / effect.
         let d = check_line_inner("xyzzy", LineKind::Event, &reg, &cfg).unwrap();
-        assert_eq!(d.message, "unparseable event (no matching syntax in 3 addons): \"xyzzy\"");
+        assert_eq!(
+            d.message,
+            "unparseable event (no matching syntax in 3 addons): \"xyzzy\""
+        );
         let d = check_line_inner("xyzzy", LineKind::Head, &reg, &cfg).unwrap();
-        assert_eq!(d.message, "unparseable section (no matching syntax in 3 addons): \"xyzzy\"");
+        assert_eq!(
+            d.message,
+            "unparseable section (no matching syntax in 3 addons): \"xyzzy\""
+        );
         // The placeholder span covers the whole stripped text.
         assert_eq!((d.col_start, d.col_end), (0, 5));
     }
@@ -883,26 +906,53 @@ mod tests {
         let reg = mini_registry();
 
         // SkBee-only match with only Skript enabled.
-        let mut cfg = CheckConfig::default();
-        cfg.enabled_addons = addons(&["Skript"]);
-        let d = eval(&reg, &cfg, LineKind::Statement, "play sound \"note.pling\"", &[1]).unwrap();
+        let cfg = CheckConfig {
+            enabled_addons: addons(&["Skript"]),
+            ..Default::default()
+        };
+        let d = eval(
+            &reg,
+            &cfg,
+            LineKind::Statement,
+            "play sound \"note.pling\"",
+            &[1],
+        )
+        .unwrap();
         assert_eq!(d.code, "addon-not-enabled");
         assert_eq!(d.severity, Severity::Warning);
         assert_eq!(d.message, "only matches addons that are not enabled: SkBee");
 
         // Empty enabled set = everything enabled -> no diagnostic.
         let cfg = CheckConfig::default();
-        assert!(eval(&reg, &cfg, LineKind::Statement, "play sound \"note.pling\"", &[1]).is_none());
+        assert!(eval(
+            &reg,
+            &cfg,
+            LineKind::Statement,
+            "play sound \"note.pling\"",
+            &[1]
+        )
+        .is_none());
 
         // Enabled-addon matching is case-insensitive.
-        let mut cfg = CheckConfig::default();
-        cfg.enabled_addons = addons(&["SKBEE"]);
-        assert!(eval(&reg, &cfg, LineKind::Statement, "play sound \"note.pling\"", &[1]).is_none());
+        let cfg = CheckConfig {
+            enabled_addons: addons(&["SKBEE"]),
+            ..Default::default()
+        };
+        assert!(eval(
+            &reg,
+            &cfg,
+            LineKind::Statement,
+            "play sound \"note.pling\"",
+            &[1]
+        )
+        .is_none());
 
         // A single enabled match is enough to stop the rule; with a second
         // addon present it degrades to ambiguous-addon instead.
-        let mut cfg = CheckConfig::default();
-        cfg.enabled_addons = addons(&["Skript"]);
+        let cfg = CheckConfig {
+            enabled_addons: addons(&["Skript"]),
+            ..Default::default()
+        };
         let d = eval(&reg, &cfg, LineKind::Statement, "kill all players", &[2, 3]).unwrap();
         assert_eq!(d.code, "ambiguous-addon");
     }
@@ -913,15 +963,34 @@ mod tests {
 
         // No plugins installed at all.
         let cfg = CheckConfig::default();
-        let d = eval(&reg, &cfg, LineKind::Statement, "despawn citizen player", &[6]).unwrap();
+        let d = eval(
+            &reg,
+            &cfg,
+            LineKind::Statement,
+            "despawn citizen player",
+            &[6],
+        )
+        .unwrap();
         assert_eq!(d.code, "plugin-missing");
         assert_eq!(d.severity, Severity::Warning);
-        assert_eq!(d.message, "syntax \"Despawn Citizen\" requires plugin(s): Citizens");
+        assert_eq!(
+            d.message,
+            "syntax \"Despawn Citizen\" requires plugin(s): Citizens"
+        );
 
         // Installed check is case-insensitive.
-        let mut cfg = CheckConfig::default();
-        cfg.installed_plugins = addons(&["citizens"]);
-        assert!(eval(&reg, &cfg, LineKind::Statement, "despawn citizen player", &[6]).is_none());
+        let cfg = CheckConfig {
+            installed_plugins: addons(&["citizens"]),
+            ..Default::default()
+        };
+        assert!(eval(
+            &reg,
+            &cfg,
+            LineKind::Statement,
+            "despawn citizen player",
+            &[6]
+        )
+        .is_none());
 
         // Two entries with missing plugins are joined with "; ", plugin
         // names with ", ".
@@ -933,8 +1002,10 @@ mod tests {
              syntax \"Spawn NPC\" requires plugin(s): Citizens, Vault"
         );
         // Vault is still missing even with Citizens installed.
-        let mut cfg = CheckConfig::default();
-        cfg.installed_plugins = addons(&["Citizens"]);
+        let cfg = CheckConfig {
+            installed_plugins: addons(&["Citizens"]),
+            ..Default::default()
+        };
         let d = eval(&reg, &cfg, LineKind::Statement, "x", &[8]).unwrap();
         assert_eq!(d.message, "syntax \"Spawn NPC\" requires plugin(s): Vault");
 
@@ -951,16 +1022,28 @@ mod tests {
 
         // addon-not-enabled beats plugin-missing: the Citizens entry is
         // the ONLY match and its addon is not enabled.
-        let mut cfg2 = CheckConfig::default();
-        cfg2.enabled_addons = addons(&["Skript"]);
-        let d = eval(&reg, &cfg2, LineKind::Statement, "despawn citizen player", &[6]).unwrap();
+        let cfg2 = CheckConfig {
+            enabled_addons: addons(&["Skript"]),
+            ..Default::default()
+        };
+        let d = eval(
+            &reg,
+            &cfg2,
+            LineKind::Statement,
+            "despawn citizen player",
+            &[6],
+        )
+        .unwrap();
         assert_eq!(d.code, "addon-not-enabled");
 
         // Ambiguous: two different addons, everything enabled.
         let d = eval(&reg, &cfg, LineKind::Statement, "kill all players", &[2, 3]).unwrap();
         assert_eq!(d.code, "ambiguous-addon");
         assert_eq!(d.severity, Severity::Info);
-        assert_eq!(d.message, "matches entries from multiple addons: Skript, SkBee");
+        assert_eq!(
+            d.message,
+            "matches entries from multiple addons: Skript, SkBee"
+        );
 
         // Single addon, no plugins, all enabled -> no diagnostic.
         assert!(eval(&reg, &cfg, LineKind::Statement, "detonate creepers", &[0]).is_none());
@@ -1025,8 +1108,10 @@ mod tests {
         let failures = reg.compile_all();
         assert!(failures.is_empty(), "compile failures: {failures:?}");
 
-        let mut cfg = CheckConfig::default();
-        cfg.enabled_addons = addons(&["Skript", "skript-citizens"]);
+        let cfg = CheckConfig {
+            enabled_addons: addons(&["Skript", "skript-citizens"]),
+            ..Default::default()
+        };
 
         let text = concat!(
             "# mini full-pipeline (gated on the pattern compiler)\n",
@@ -1054,15 +1139,24 @@ mod tests {
 
         assert_eq!((ds[1].line, ds[1].code), (6, "addon-not-enabled"));
         assert_eq!(ds[1].severity, Severity::Warning);
-        assert_eq!(ds[1].message, "only matches addons that are not enabled: SkBee");
+        assert_eq!(
+            ds[1].message,
+            "only matches addons that are not enabled: SkBee"
+        );
 
         assert_eq!((ds[2].line, ds[2].code), (7, "plugin-missing"));
         assert_eq!(ds[2].severity, Severity::Warning);
-        assert_eq!(ds[2].message, "syntax \"Despawn Citizen\" requires plugin(s): Citizens");
+        assert_eq!(
+            ds[2].message,
+            "syntax \"Despawn Citizen\" requires plugin(s): Citizens"
+        );
 
         assert_eq!((ds[3].line, ds[3].code), (8, "ambiguous-addon"));
         assert_eq!(ds[3].severity, Severity::Info);
-        assert_eq!(ds[3].message, "matches entries from multiple addons: Skript, SkBee");
+        assert_eq!(
+            ds[3].message,
+            "matches entries from multiple addons: Skript, SkBee"
+        );
     }
 
     /// Full pipeline against the real embedded corpus (8712 entries).
@@ -1090,8 +1184,10 @@ mod tests {
         );
         assert_eq!(reg.repaired().len(), 15);
 
-        let mut cfg = CheckConfig::default();
-        cfg.enabled_addons = addons(&["Skript", "skUtilities"]);
+        let cfg = CheckConfig {
+            enabled_addons: addons(&["Skript", "skUtilities"]),
+            ..Default::default()
+        };
 
         let text = concat!(
             "# full-pipeline smoke test\n",
@@ -1120,10 +1216,18 @@ mod tests {
                 (3, "ambiguous-addon"),   // broadcast: Skript + skript-reflect + Hippo + ...
                 (4, "addon-not-enabled"), // destroy event-train: only traincarts/non-catch-alls match
                 (5, "plugin-missing"),    // restart server: skUtilities requires Spigot
-                (6, "ambiguous-addon"),   // if player is op: Skript Is Op + Conquer (catch-alls filtered)
+                (6, "ambiguous-addon"), // if player is op: Skript Is Op + Conquer (catch-alls filtered)
             ]
         );
-        assert!(ds[1].message.contains("skript-traincarts"), "{}", ds[1].message);
-        assert!(ds[2].message.contains("Restart Server"), "{}", ds[2].message);
+        assert!(
+            ds[1].message.contains("skript-traincarts"),
+            "{}",
+            ds[1].message
+        );
+        assert!(
+            ds[2].message.contains("Restart Server"),
+            "{}",
+            ds[2].message
+        );
     }
 }

@@ -400,7 +400,9 @@ impl TypeLattice {
             }
             for (candidate, key) in candidates.iter().zip(keys.iter()) {
                 lattice.names.entry(key.clone()).or_insert(tid);
-                lattice.aliases.insert(squeeze_lower(candidate), key.clone());
+                lattice
+                    .aliases
+                    .insert(squeeze_lower(candidate), key.clone());
             }
         }
 
@@ -564,14 +566,19 @@ mod tests {
         assert_eq!(expand_pattern("biome[s]"), ["biome", "biomes"]);
         // Choice groups keep alternative order (mid-word suffixes work).
         assert_eq!(expand_pattern("entit(y|ies)"), ["entity", "entities"]);
-        assert_eq!(expand_pattern("difficult(y|ies)"), ["difficulty", "difficulties"]);
+        assert_eq!(
+            expand_pattern("difficult(y|ies)"),
+            ["difficulty", "difficulties"]
+        );
         // Nested optionals + explicit space group.
         assert_eq!(
             expand_pattern("num[ber][s]"),
             ["num", "nums", "number", "numbers"]
         );
         assert_eq!(
-            expand_pattern("living[ ]entit(y|ies)").first().map(String::as_str),
+            expand_pattern("living[ ]entit(y|ies)")
+                .first()
+                .map(String::as_str),
             Some("livingentity")
         );
         // Regex regions are stripped (the Character type's whole pattern
@@ -604,10 +611,16 @@ mod tests {
             split_return_type("String & Item Stack"),
             ["String", "Item Stack"]
         );
-        assert_eq!(split_return_type("%conversationmessage%"), ["conversationmessage"]);
+        assert_eq!(
+            split_return_type("%conversationmessage%"),
+            ["conversationmessage"]
+        );
         assert_eq!(split_return_type("[Navigation] Type"), ["Navigation Type"]);
         // Cut at the first '('.
-        assert_eq!(split_return_type(r#"String ("PRIVATE", "BOT")"#), ["String"]);
+        assert_eq!(
+            split_return_type(r#"String ("PRIVATE", "BOT")"#),
+            ["String"]
+        );
         assert_eq!(split_return_type("object (protected region)"), ["object"]);
     }
 
@@ -657,7 +670,9 @@ mod tests {
         let l = lattice();
         let player = l.lookup("player").expect("player type in corpus");
         let entity = l.lookup("entity").expect("entity type in corpus");
-        let living = l.lookup("living entity").expect("living entity type in corpus");
+        let living = l
+            .lookup("living entity")
+            .expect("living entity type in corpus");
         let itemtype = l.lookup("item type").expect("item type in corpus");
         let item = l.lookup("item").expect("item in corpus");
         let integer = l.lookup("integer").expect("integer in corpus");
@@ -697,4 +712,3 @@ mod tests {
         assert!(!l.is_subtype(0, usize::MAX));
     }
 }
-

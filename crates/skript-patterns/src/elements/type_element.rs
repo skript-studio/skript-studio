@@ -49,12 +49,12 @@ impl TypePatternElement {
         let mut is_nullable = false;
         {
             let bytes = string.as_bytes(); // '-', '*', '~' are ASCII
-            loop {
-                // DIVERGENCE: Java's string.charAt(caret) throws
-                // StringIndexOutOfBoundsException when the slot consists
-                // only of flags (e.g. "%-%"); we treat end-of-string as
-                // terminating the flag loop instead of panicking.
-                let Some(&c) = bytes.get(caret) else { break };
+
+            // DIVERGENCE: Java's string.charAt(caret) throws
+            // StringIndexOutOfBoundsException when the slot consists
+            // only of flags (e.g. "%-%"); we treat end-of-string as
+            // terminating the flag loop instead of panicking.
+            while let Some(&c) = bytes.get(caret) {
                 match c {
                     b'-' => is_nullable = true,
                     b'*' => flag_mask &= !ParseFlags::EXPRESSIONS.0,
@@ -198,13 +198,8 @@ impl TypePatternElement {
         // DIVERGENCE: Java advances one UTF-16 code unit; we advance to the
         // next UTF-8 char boundary (identical for ASCII input).
         let search_start = parse_utils::plus_one_char(expr, current_offset);
-        let new_offset = parse_utils::next_occurrence(
-            expr,
-            &next_literal,
-            search_start,
-            parse_context,
-            false,
-        );
+        let new_offset =
+            parse_utils::next_occurrence(expr, &next_literal, search_start, parse_context, false);
         if new_offset.is_none() && state.next_literal_is_whitespace {
             // This may be because the next PatternElement is optional or an
             // empty choice (there may be other cases too).
@@ -254,6 +249,7 @@ impl PatternElement for TypePatternElement {
     ///   `ParserInstance.getHasDelayBefore()`), and
     /// - keeps a backup of the first match containing "unparsed literals"
     ///   in case no cleaner match exists (`hasUnparsedLiterals`).
+    ///
     /// None of that is meaningful for static analysis (no live expression
     /// parser, no runtime state): the TypeResolver seam replaces
     /// `new SkriptParser(substring, effectiveFlags, context)
@@ -314,10 +310,11 @@ impl PatternElement for TypePatternElement {
             }
 
             // Advance the expression offset to the next candidate split point.
-            expr_offset = match self.advance_offset(expr, expr_offset, result.parse_context, &mut state) {
-                Some(offset) => offset,
-                None => return false,
-            };
+            expr_offset =
+                match self.advance_offset(expr, expr_offset, result.parse_context, &mut state) {
+                    Some(offset) => offset,
+                    None => return false,
+                };
         }
     }
 
@@ -385,7 +382,7 @@ mod tests {
     use super::*;
     use crate::elements::LiteralPatternElement;
     use crate::match_result::SlotMatch;
-    use crate::resolver::{PermissiveResolver, TypeResolver, set_type_resolver};
+    use crate::resolver::{set_type_resolver, PermissiveResolver, TypeResolver};
 
     // ------------------------------------------------------------------
     // helpers
@@ -561,16 +558,16 @@ mod tests {
 
         let el = TypePatternElement::from_string("*number", 0);
         // '*' clears PARSE_EXPRESSIONS (bit 1)
-        assert_eq!(el.flag_mask, !0u32 & !ParseFlags::EXPRESSIONS.0);
+        assert_eq!(el.flag_mask, !ParseFlags::EXPRESSIONS.0);
 
         let el = TypePatternElement::from_string("~number", 0);
         // '~' clears PARSE_LITERALS (bit 2)
-        assert_eq!(el.flag_mask, !0u32 & !ParseFlags::LITERALS.0);
+        assert_eq!(el.flag_mask, !ParseFlags::LITERALS.0);
 
         // combined flags, in any order/repetition
         let el = TypePatternElement::from_string("-*~entities", 1);
         assert!(el.is_nullable);
-        assert_eq!(el.flag_mask, !0u32 & !1 & !2);
+        assert_eq!(el.flag_mask, !1 & !2);
         assert_eq!(el.classes[0].code_name, "entity");
         assert!(el.classes[0].is_plural);
     }
@@ -609,12 +606,36 @@ mod tests {
     fn from_string_multiple_types_and_plurals() {
         let el = TypePatternElement::from_string("entity/location", 0);
         assert_eq!(el.classes.len(), 2);
-        assert_eq!(el.classes[0], TypeSpec { code_name: "entity".into(), is_plural: false });
-        assert_eq!(el.classes[1], TypeSpec { code_name: "location".into(), is_plural: false });
+        assert_eq!(
+            el.classes[0],
+            TypeSpec {
+                code_name: "entity".into(),
+                is_plural: false
+            }
+        );
+        assert_eq!(
+            el.classes[1],
+            TypeSpec {
+                code_name: "location".into(),
+                is_plural: false
+            }
+        );
 
         let el = TypePatternElement::from_string("entities/locations", 0);
-        assert_eq!(el.classes[0], TypeSpec { code_name: "entity".into(), is_plural: true });
-        assert_eq!(el.classes[1], TypeSpec { code_name: "location".into(), is_plural: true });
+        assert_eq!(
+            el.classes[0],
+            TypeSpec {
+                code_name: "entity".into(),
+                is_plural: true
+            }
+        );
+        assert_eq!(
+            el.classes[1],
+            TypeSpec {
+                code_name: "location".into(),
+                is_plural: true
+            }
+        );
 
         let el = TypePatternElement::from_string("itemtypes", 0);
         assert_eq!(el.classes[0].code_name, "itemtype");
@@ -624,7 +645,7 @@ mod tests {
         let el = TypePatternElement::from_string("~entity/location@1", 0);
         assert_eq!(el.time, 1);
         assert_eq!(el.classes.len(), 2);
-        assert_eq!(el.flag_mask, !0u32 & !ParseFlags::LITERALS.0);
+        assert_eq!(el.flag_mask, !ParseFlags::LITERALS.0);
     }
 
     #[test]
@@ -668,7 +689,11 @@ mod tests {
         ];
         for (spec, expected) in cases {
             let el = TypePatternElement::from_string(spec, 0);
-            assert_eq!(&el.to_string_pretty(&StringificationProperties::DEFAULT), expected, "spec {spec}");
+            assert_eq!(
+                &el.to_string_pretty(&StringificationProperties::DEFAULT),
+                expected,
+                "spec {spec}"
+            );
         }
     }
 
@@ -872,7 +897,10 @@ mod tests {
         link(&el, LiteralPatternElement::new_rc(" apples"));
         let mut result = MatchResult::new(1);
         assert!(el.borrow().match_("\" apples\" 5 apples", &mut result));
-        assert_eq!(result.expressions[0].as_ref().unwrap().text, "\" apples\" 5");
+        assert_eq!(
+            result.expressions[0].as_ref().unwrap().text,
+            "\" apples\" 5"
+        );
     }
 
     #[test]
@@ -951,7 +979,10 @@ mod tests {
         assert!(el.borrow().match_("somewhere", &mut result));
         let slot = result.expressions[0].as_ref().unwrap();
         assert_eq!(slot.text, "somewhere");
-        assert_eq!(slot.type_names, vec!["entity".to_string(), "location".to_string()]);
+        assert_eq!(
+            slot.type_names,
+            vec!["entity".to_string(), "location".to_string()]
+        );
     }
 
     #[test]
@@ -1005,8 +1036,13 @@ mod tests {
         let el = type_rc("string", 0);
         link(&el, LiteralPatternElement::new_rc(" and pears"));
         let mut result = MatchResult::new(1);
-        assert!(el.borrow().match_("say \"apples and pears\" and pears", &mut result));
-        assert_eq!(result.expressions[0].as_ref().unwrap().text, "say \"apples and pears\"");
+        assert!(el
+            .borrow()
+            .match_("say \"apples and pears\" and pears", &mut result));
+        assert_eq!(
+            result.expressions[0].as_ref().unwrap().text,
+            "say \"apples and pears\""
+        );
         assert_eq!(result.expr_offset, 32);
     }
 }

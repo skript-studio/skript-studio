@@ -128,82 +128,202 @@ pub struct Lexer {
 fn match_keyword(text: &str) -> Option<&'static str> {
     match text.len() {
         2 => {
-            if text.eq_ignore_ascii_case("on") { return Some("on"); }
-            if text.eq_ignore_ascii_case("if") { return Some("if"); }
-            if text.eq_ignore_ascii_case("to") { return Some("to"); }
-            if text.eq_ignore_ascii_case("of") { return Some("of"); }
-            if text.eq_ignore_ascii_case("in") { return Some("in"); }
-            if text.eq_ignore_ascii_case("by") { return Some("by"); }
-            if text.eq_ignore_ascii_case("as") { return Some("as"); }
-            if text.eq_ignore_ascii_case("do") { return Some("do"); }
-            if text.eq_ignore_ascii_case("is") { return Some("is"); }
-            if text.eq_ignore_ascii_case("at") { return Some("at"); }
-            if text.eq_ignore_ascii_case("or") { return Some("or"); }
-            if text.eq_ignore_ascii_case("no") { return Some("no"); }
+            if text.eq_ignore_ascii_case("on") {
+                return Some("on");
+            }
+            if text.eq_ignore_ascii_case("if") {
+                return Some("if");
+            }
+            if text.eq_ignore_ascii_case("to") {
+                return Some("to");
+            }
+            if text.eq_ignore_ascii_case("of") {
+                return Some("of");
+            }
+            if text.eq_ignore_ascii_case("in") {
+                return Some("in");
+            }
+            if text.eq_ignore_ascii_case("by") {
+                return Some("by");
+            }
+            if text.eq_ignore_ascii_case("as") {
+                return Some("as");
+            }
+            if text.eq_ignore_ascii_case("do") {
+                return Some("do");
+            }
+            if text.eq_ignore_ascii_case("is") {
+                return Some("is");
+            }
+            if text.eq_ignore_ascii_case("at") {
+                return Some("at");
+            }
+            if text.eq_ignore_ascii_case("or") {
+                return Some("or");
+            }
+            if text.eq_ignore_ascii_case("no") {
+                return Some("no");
+            }
         }
         3 => {
-            if text.eq_ignore_ascii_case("set") { return Some("set"); }
-            if text.eq_ignore_ascii_case("add") { return Some("add"); }
-            if text.eq_ignore_ascii_case("not") { return Some("not"); }
-            if text.eq_ignore_ascii_case("for") { return Some("for"); }
-            if text.eq_ignore_ascii_case("and") { return Some("and"); }
-            if text.eq_ignore_ascii_case("now") { return Some("now"); }
-            if text.eq_ignore_ascii_case("yes") { return Some("yes"); }
-            if text.eq_ignore_ascii_case("run") { return Some("run"); }
+            if text.eq_ignore_ascii_case("set") {
+                return Some("set");
+            }
+            if text.eq_ignore_ascii_case("add") {
+                return Some("add");
+            }
+            if text.eq_ignore_ascii_case("not") {
+                return Some("not");
+            }
+            if text.eq_ignore_ascii_case("for") {
+                return Some("for");
+            }
+            if text.eq_ignore_ascii_case("and") {
+                return Some("and");
+            }
+            if text.eq_ignore_ascii_case("now") {
+                return Some("now");
+            }
+            if text.eq_ignore_ascii_case("yes") {
+                return Some("yes");
+            }
+            if text.eq_ignore_ascii_case("run") {
+                return Some("run");
+            }
         }
         4 => {
-            if text.eq_ignore_ascii_case("else") { return Some("else"); }
-            if text.eq_ignore_ascii_case("loop") { return Some("loop"); }
-            if text.eq_ignore_ascii_case("from") { return Some("from"); }
-            if text.eq_ignore_ascii_case("into") { return Some("into"); }
-            if text.eq_ignore_ascii_case("with") { return Some("with"); }
-            if text.eq_ignore_ascii_case("stop") { return Some("stop"); }
-            if text.eq_ignore_ascii_case("exit") { return Some("exit"); }
-            if text.eq_ignore_ascii_case("wait") { return Some("wait"); }
-            if text.eq_ignore_ascii_case("send") { return Some("send"); }
-            if text.eq_ignore_ascii_case("make") { return Some("make"); }
-            if text.eq_ignore_ascii_case("heal") { return Some("heal"); }
-            if text.eq_ignore_ascii_case("play") { return Some("play"); }
-            if text.eq_ignore_ascii_case("give") { return Some("give"); }
+            if text.eq_ignore_ascii_case("else") {
+                return Some("else");
+            }
+            if text.eq_ignore_ascii_case("loop") {
+                return Some("loop");
+            }
+            if text.eq_ignore_ascii_case("from") {
+                return Some("from");
+            }
+            if text.eq_ignore_ascii_case("into") {
+                return Some("into");
+            }
+            if text.eq_ignore_ascii_case("with") {
+                return Some("with");
+            }
+            if text.eq_ignore_ascii_case("stop") {
+                return Some("stop");
+            }
+            if text.eq_ignore_ascii_case("exit") {
+                return Some("exit");
+            }
+            if text.eq_ignore_ascii_case("wait") {
+                return Some("wait");
+            }
+            if text.eq_ignore_ascii_case("send") {
+                return Some("send");
+            }
+            if text.eq_ignore_ascii_case("make") {
+                return Some("make");
+            }
+            if text.eq_ignore_ascii_case("heal") {
+                return Some("heal");
+            }
+            if text.eq_ignore_ascii_case("play") {
+                return Some("play");
+            }
+            if text.eq_ignore_ascii_case("give") {
+                return Some("give");
+            }
         }
         5 => {
-            if text.eq_ignore_ascii_case("while") { return Some("while"); }
-            if text.eq_ignore_ascii_case("after") { return Some("after"); }
-            if text.eq_ignore_ascii_case("every") { return Some("every"); }
-            if text.eq_ignore_ascii_case("clear") { return Some("clear"); }
-            if text.eq_ignore_ascii_case("using") { return Some("using"); }
-            if text.eq_ignore_ascii_case("named") { return Some("named"); }
-            if text.eq_ignore_ascii_case("where") { return Some("where"); }
-            if text.eq_ignore_ascii_case("spawn") { return Some("spawn"); }
-            if text.eq_ignore_ascii_case("erase") { return Some("erase"); }
+            if text.eq_ignore_ascii_case("while") {
+                return Some("while");
+            }
+            if text.eq_ignore_ascii_case("after") {
+                return Some("after");
+            }
+            if text.eq_ignore_ascii_case("every") {
+                return Some("every");
+            }
+            if text.eq_ignore_ascii_case("clear") {
+                return Some("clear");
+            }
+            if text.eq_ignore_ascii_case("using") {
+                return Some("using");
+            }
+            if text.eq_ignore_ascii_case("named") {
+                return Some("named");
+            }
+            if text.eq_ignore_ascii_case("where") {
+                return Some("where");
+            }
+            if text.eq_ignore_ascii_case("spawn") {
+                return Some("spawn");
+            }
+            if text.eq_ignore_ascii_case("erase") {
+                return Some("erase");
+            }
             // isn't is 5 chars
-            if text.eq_ignore_ascii_case("isn't") { return Some("isn't"); }
+            if text.eq_ignore_ascii_case("isn't") {
+                return Some("isn't");
+            }
         }
         6 => {
-            if text.eq_ignore_ascii_case("remove") { return Some("remove"); }
-            if text.eq_ignore_ascii_case("return") { return Some("return"); }
-            if text.eq_ignore_ascii_case("cancel") { return Some("cancel"); }
-            if text.eq_ignore_ascii_case("damage") { return Some("damage"); }
-            if text.eq_ignore_ascii_case("before") { return Some("before"); }
-            if text.eq_ignore_ascii_case("delete") { return Some("delete"); }
+            if text.eq_ignore_ascii_case("remove") {
+                return Some("remove");
+            }
+            if text.eq_ignore_ascii_case("return") {
+                return Some("return");
+            }
+            if text.eq_ignore_ascii_case("cancel") {
+                return Some("cancel");
+            }
+            if text.eq_ignore_ascii_case("damage") {
+                return Some("damage");
+            }
+            if text.eq_ignore_ascii_case("before") {
+                return Some("before");
+            }
+            if text.eq_ignore_ascii_case("delete") {
+                return Some("delete");
+            }
         }
         7 => {
-            if text.eq_ignore_ascii_case("trigger") { return Some("trigger"); }
-            if text.eq_ignore_ascii_case("command") { return Some("command"); }
-            if text.eq_ignore_ascii_case("options") { return Some("options"); }
-            if text.eq_ignore_ascii_case("execute") { return Some("execute"); }
-            if text.eq_ignore_ascii_case("aliases") { return Some("aliases"); }
-            if text.eq_ignore_ascii_case("example") { return Some("example"); }
+            if text.eq_ignore_ascii_case("trigger") {
+                return Some("trigger");
+            }
+            if text.eq_ignore_ascii_case("command") {
+                return Some("command");
+            }
+            if text.eq_ignore_ascii_case("options") {
+                return Some("options");
+            }
+            if text.eq_ignore_ascii_case("execute") {
+                return Some("execute");
+            }
+            if text.eq_ignore_ascii_case("aliases") {
+                return Some("aliases");
+            }
+            if text.eq_ignore_ascii_case("example") {
+                return Some("example");
+            }
         }
         8 => {
-            if text.eq_ignore_ascii_case("continue") { return Some("continue"); }
-            if text.eq_ignore_ascii_case("function") { return Some("function"); }
+            if text.eq_ignore_ascii_case("continue") {
+                return Some("continue");
+            }
+            if text.eq_ignore_ascii_case("function") {
+                return Some("function");
+            }
             // teleport is 8 chars
-            if text.eq_ignore_ascii_case("teleport") { return Some("teleport"); }
+            if text.eq_ignore_ascii_case("teleport") {
+                return Some("teleport");
+            }
         }
         9 => {
-            if text.eq_ignore_ascii_case("broadcast") { return Some("broadcast"); }
-            if text.eq_ignore_ascii_case("variables") { return Some("variables"); }
+            if text.eq_ignore_ascii_case("broadcast") {
+                return Some("broadcast");
+            }
+            if text.eq_ignore_ascii_case("variables") {
+                return Some("variables");
+            }
         }
         _ => {}
     }
@@ -283,7 +403,9 @@ impl Lexer {
                     return;
                 }
                 None => return,
-                _ => { self.pos += 1; }
+                _ => {
+                    self.pos += 1;
+                }
             }
         }
     }
@@ -356,7 +478,10 @@ impl Lexer {
 
         while scan < self.chars.len() {
             match self.chars[scan] {
-                ' ' => { indent_width += 1; scan += 1; }
+                ' ' => {
+                    indent_width += 1;
+                    scan += 1;
+                }
                 '\t' => {
                     indent_width += 4 - (indent_width % 4);
                     scan += 1;
@@ -457,8 +582,7 @@ impl Lexer {
         }
 
         if c.is_ascii_digit()
-            || ((c == '+' || c == '-')
-                && self.peek_next().map_or(false, |n| n.is_ascii_digit()))
+            || ((c == '+' || c == '-') && self.peek_next().is_some_and(|n| n.is_ascii_digit()))
         {
             return self.parse_number(start);
         }
@@ -567,7 +691,9 @@ impl Lexer {
                     }
                     content.push('}');
                 }
-                _ => { content.push(c); }
+                _ => {
+                    content.push(c);
+                }
             }
         }
 
@@ -859,8 +985,7 @@ impl Lexer {
             }
 
             if c.is_ascii_digit()
-                || ((c == '+' || c == '-')
-                    && self.peek_next().map_or(false, |n| n.is_ascii_digit()))
+                || ((c == '+' || c == '-') && self.peek_next().is_some_and(|n| n.is_ascii_digit()))
             {
                 return self.parse_number(start);
             }
@@ -968,14 +1093,62 @@ mod tests {
     #[test]
     fn test_keyword_tokens() {
         let cases = [
-            "on", "if", "else", "loop", "while", "for", "set", "delete",
-            "clear", "add", "remove", "give", "function", "command",
-            "trigger", "options", "execute", "return", "stop", "exit",
-            "continue", "cancel", "wait", "broadcast", "send", "make",
-            "spawn", "teleport", "heal", "damage", "play", "run", "with",
-            "at", "to", "from", "into", "of", "in", "named", "where", "by",
-            "as", "and", "or", "not", "is", "isn't", "every", "after",
-            "before", "using", "aliases", "variables", "example", "do",
+            "on",
+            "if",
+            "else",
+            "loop",
+            "while",
+            "for",
+            "set",
+            "delete",
+            "clear",
+            "add",
+            "remove",
+            "give",
+            "function",
+            "command",
+            "trigger",
+            "options",
+            "execute",
+            "return",
+            "stop",
+            "exit",
+            "continue",
+            "cancel",
+            "wait",
+            "broadcast",
+            "send",
+            "make",
+            "spawn",
+            "teleport",
+            "heal",
+            "damage",
+            "play",
+            "run",
+            "with",
+            "at",
+            "to",
+            "from",
+            "into",
+            "of",
+            "in",
+            "named",
+            "where",
+            "by",
+            "as",
+            "and",
+            "or",
+            "not",
+            "is",
+            "isn't",
+            "every",
+            "after",
+            "before",
+            "using",
+            "aliases",
+            "variables",
+            "example",
+            "do",
         ];
         for kw in &cases {
             let toks = tokenize(kw);
@@ -1014,10 +1187,7 @@ mod tests {
     #[test]
     fn test_number_negative() {
         let toks = tokenize("-5");
-        assert_eq!(
-            toks,
-            vec![Token::Number("-5".into()), Token::Eof]
-        );
+        assert_eq!(toks, vec![Token::Number("-5".into()), Token::Eof]);
     }
 
     // 4. Simple string
@@ -1037,10 +1207,7 @@ mod tests {
     #[test]
     fn test_variable_simple() {
         let toks = tokenize("{_var}");
-        assert_eq!(
-            toks,
-            vec![Token::Variable(vec!["_var".into()]), Token::Eof]
-        );
+        assert_eq!(toks, vec![Token::Variable(vec!["_var".into()]), Token::Eof]);
     }
 
     #[test]
@@ -1048,10 +1215,7 @@ mod tests {
         let toks = tokenize("{list::*}");
         assert_eq!(
             toks,
-            vec![
-                Token::Variable(vec!["list".into(), "*".into()]),
-                Token::Eof,
-            ]
+            vec![Token::Variable(vec!["list".into(), "*".into()]), Token::Eof,]
         );
     }
 
@@ -1080,8 +1244,7 @@ mod tests {
     // 8. Multi-dedent
     #[test]
     fn test_multi_dedent() {
-        let source =
-            "loop 5 times:\n    if true:\n        broadcast \"hi\"\nbroadcast \"bye\"";
+        let source = "loop 5 times:\n    if true:\n        broadcast \"hi\"\nbroadcast \"bye\"";
         let toks: Vec<_> = tokenize(source)
             .into_iter()
             .filter(|t| matches!(t, Token::Indent | Token::Dedent))
@@ -1100,8 +1263,14 @@ mod tests {
         assert_eq!(
             toks,
             vec![
-                Token::Plus, Token::Minus, Token::Star, Token::Slash,
-                Token::Percent, Token::Caret, Token::Tilde, Token::Eof,
+                Token::Plus,
+                Token::Minus,
+                Token::Star,
+                Token::Slash,
+                Token::Percent,
+                Token::Caret,
+                Token::Tilde,
+                Token::Eof,
             ]
         );
     }
@@ -1112,8 +1281,13 @@ mod tests {
         assert_eq!(
             toks,
             vec![
-                Token::EqualEqual, Token::NotEqual, Token::LessEqual,
-                Token::GreaterEqual, Token::Less, Token::Greater, Token::Eof,
+                Token::EqualEqual,
+                Token::NotEqual,
+                Token::LessEqual,
+                Token::GreaterEqual,
+                Token::Less,
+                Token::Greater,
+                Token::Eof,
             ]
         );
     }
@@ -1124,8 +1298,12 @@ mod tests {
         assert_eq!(
             toks,
             vec![
-                Token::Equal, Token::ColonEqual, Token::PlusEqual,
-                Token::MinusEqual, Token::StarEqual, Token::SlashEqual,
+                Token::Equal,
+                Token::ColonEqual,
+                Token::PlusEqual,
+                Token::MinusEqual,
+                Token::StarEqual,
+                Token::SlashEqual,
                 Token::Eof,
             ]
         );
@@ -1146,7 +1324,10 @@ mod tests {
         assert_eq!(
             toks,
             vec![
-                Token::LParen, Token::RParen, Token::LBracket, Token::RBracket,
+                Token::LParen,
+                Token::RParen,
+                Token::LBracket,
+                Token::RBracket,
                 Token::Eof,
             ]
         );
@@ -1275,19 +1456,13 @@ mod tests {
     #[test]
     fn test_identifier_with_dash() {
         let toks = tokenize("arg-1");
-        assert_eq!(
-            toks,
-            vec![Token::Identifier("arg-1".into()), Token::Eof]
-        );
+        assert_eq!(toks, vec![Token::Identifier("arg-1".into()), Token::Eof]);
     }
 
     #[test]
     fn test_identifier_with_underscore() {
         let toks = tokenize("my_var");
-        assert_eq!(
-            toks,
-            vec![Token::Identifier("my_var".into()), Token::Eof]
-        );
+        assert_eq!(toks, vec![Token::Identifier("my_var".into()), Token::Eof]);
     }
 
     #[test]
@@ -1384,10 +1559,7 @@ mod tests {
     #[test]
     fn test_multiple_operators_no_space() {
         let toks = tokenize("+ -");
-        assert_eq!(
-            toks,
-            vec![Token::Plus, Token::Minus, Token::Eof]
-        );
+        assert_eq!(toks, vec![Token::Plus, Token::Minus, Token::Eof]);
     }
 
     #[test]
@@ -1403,7 +1575,9 @@ mod tests {
     fn test_indented_comment_line() {
         let source = "set {_x} to 1\n    # indented comment\n    broadcast {_x}";
         let toks = tokenize(source);
-        let idx_broadcast = toks.iter().position(|t| matches!(t, Token::Keyword(k) if *k == "broadcast"));
+        let idx_broadcast = toks
+            .iter()
+            .position(|t| matches!(t, Token::Keyword(k) if *k == "broadcast"));
         let idx_indent = toks.iter().position(|t| *t == Token::Indent);
         assert!(idx_indent.is_some());
         assert!(idx_broadcast.is_some());
