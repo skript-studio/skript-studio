@@ -35,6 +35,7 @@ use skript_core::references;
 use skript_core::tokens::{self, SemanticType};
 use skript_core::validation::{self, Severity};
 use tower_lsp::jsonrpc::Result as RpcResult;
+use tower_lsp::lsp_types::SelectionRangeProviderCapability;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
@@ -356,7 +357,10 @@ impl LanguageServer for Backend {
                 ..Default::default()
             }),
             inlay_hint_provider: Some(OneOf::Left(true)),
-            // Explicitly NOT advertising: rename, formatting.
+            rename_provider: Some(OneOf::Left(true)),
+            document_highlight_provider: Some(OneOf::Left(true)),
+            selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+            // Explicitly NOT advertising: formatting.
             ..Default::default()
         };
 
@@ -835,6 +839,162 @@ impl LanguageServer for Backend {
             .unwrap_or_default();
 
         Ok(Some(hints))
+    }
+
+    async fn rename(
+        &self,
+        params: tower_lsp::lsp_types::RenameParams,
+    ) -> RpcResult<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let pos = params.text_document_position.position;
+        let new_name = params.new_name;
+
+        // Resolve the symbol at the cursor, then find all references.
+        // Each reference span becomes a TextEdit replacing the old name
+        // with the new one. Variable names in Skript are wrapped in
+        // `{...}`; the user types the inner name, so we strip/restore
+        // braces as needed.
+        let edits = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let symbol = references::find_symbol_at_offset(
+                    &snap.parse_result.program,
+                    &snap.analysis,
+                    offset,
+                )?;
+                let spans = references::find_references(&snap.parse_result.program, &symbol);
+
+                let doc_uri = params.text_document_position.text_document.uri.clone();
+                let text_edits: Vec<TextEdit> = spans
+                    .into_iter()
+                    .map(|span| {
+                        let range = span_to_range(&text, span);
+                        let replacement = match symbol.kind {
+                            references::SymbolKind::Variable => {
+                                // Variables are `{name}` — the span covers
+                                // the braces; the user types just the name.
+                                format!("{{{new_name}}}")
+                            }
+                            _ => new_name.clone(),
+                        };
+                        TextEdit::new(range, replacement)
+                    })
+                    .collect();
+                let mut changes = std::collections::HashMap::new();
+                changes.insert(doc_uri, text_edits);
+                Some(WorkspaceEdit::new(changes))
+            })
+            .flatten();
+
+        Ok(edits)
+    }
+
+    async fn document_highlight(
+        &self,
+        params: tower_lsp::lsp_types::DocumentHighlightParams,
+    ) -> RpcResult<Option<Vec<tower_lsp::lsp_types::DocumentHighlight>>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+        let pos = params.text_document_position_params.position;
+
+        // Highlight all occurrences of the symbol under the cursor.
+        let highlights = self
+            .state
+            .with_snapshot(&uri, |snap| {
+                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let symbol = references::find_symbol_at_offset(
+                    &snap.parse_result.program,
+                    &snap.analysis,
+                    offset,
+                )?;
+                let spans = references::find_references(&snap.parse_result.program, &symbol);
+                Some(
+                    spans
+                        .into_iter()
+                        .map(|span| tower_lsp::lsp_types::DocumentHighlight {
+                            range: span_to_range(&text, span),
+                            kind: Some(tower_lsp::lsp_types::DocumentHighlightKind::READ),
+                        })
+                        .collect(),
+                )
+            })
+            .flatten();
+
+        Ok(highlights)
+    }
+
+    async fn selection_range(
+        &self,
+        params: tower_lsp::lsp_types::SelectionRangeParams,
+    ) -> RpcResult<Option<Vec<tower_lsp::lsp_types::SelectionRange>>> {
+        let uri = params.text_document.uri.to_string();
+        let Some(text) = self.state.get_doc(&uri) else {
+            return Ok(None);
+        };
+
+        // For each requested position, build a chain of progressively
+        // wider selections: character → word → line → full document.
+        // This is a structural selection (not AST-based) — good enough
+        // for the common "expand selection" keystroke (Ctrl+Shift+→).
+        let results: Vec<tower_lsp::lsp_types::SelectionRange> = params
+            .positions
+            .into_iter()
+            .map(|pos| {
+                let line_idx = pos.line as usize;
+                let lines: Vec<&str> = text.lines().collect();
+                let line_text = lines.get(line_idx).copied().unwrap_or("");
+                let char_idx = pos.character as usize;
+                let char_idx = char_idx.min(line_text.len());
+
+                // Word range: expand left/right to word boundaries
+                // (alphanumeric + underscore).
+                let word_start = line_text[..char_idx]
+                    .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                let word_end = line_text[char_idx..]
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|i| char_idx + i)
+                    .unwrap_or(line_text.len());
+
+                let word_range = Range::new(
+                    Position::new(pos.line, word_start as u32),
+                    Position::new(pos.line, word_end as u32),
+                );
+                let line_range = Range::new(
+                    Position::new(pos.line, 0),
+                    Position::new(pos.line, line_text.len() as u32),
+                );
+                let total_lines = lines.len() as u32;
+                let doc_range = Range::new(Position::new(0, 0), Position::new(total_lines, 0));
+
+                // Chain: word → line → document
+                let doc_sel = tower_lsp::lsp_types::SelectionRange {
+                    range: doc_range,
+                    parent: None,
+                };
+                let line_sel = tower_lsp::lsp_types::SelectionRange {
+                    range: line_range,
+                    parent: Some(Box::new(doc_sel)),
+                };
+                tower_lsp::lsp_types::SelectionRange {
+                    range: word_range,
+                    parent: Some(Box::new(line_sel)),
+                }
+            })
+            .collect();
+
+        Ok(Some(results))
     }
 
     async fn shutdown(&self) -> RpcResult<()> {
