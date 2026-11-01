@@ -16,3 +16,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "compile_corpus"
 harness = false
 
+[[bench]]
+name = "refcell_vs_mutex"
+harness = false
+
