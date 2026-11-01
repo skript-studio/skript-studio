@@ -1019,7 +1019,6 @@ mod tests {
     /// Deterministic full-pipeline test on the mini registry: covers ALL
     /// FOUR rules plus clean lines, skips, and column computation.
     #[test]
-    #[ignore = "gated on compiler (Agent 5) and matcher (Agent 6)"]
     fn full_pipeline_mini_registry() {
         set_type_resolver(Rc::new(PermissiveResolver));
         let mut reg = mini_registry();
@@ -1075,7 +1074,6 @@ mod tests {
     /// `[on] [all] %javatype%`) match every line. That rule is covered
     /// deterministically by `full_pipeline_mini_registry` above.
     #[test]
-    #[ignore = "gated on compiler (Agent 5) and matcher (Agent 6)"]
     fn full_pipeline_embedded_corpus() {
         set_type_resolver(Rc::new(PermissiveResolver));
         let mut reg = Registry::embedded().expect("embedded corpus must load");

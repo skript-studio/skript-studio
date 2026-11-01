@@ -279,7 +279,6 @@ mod tests {
     // ==================================================================
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn match_requires_full_input_consumption() {
         // `<.+>` full-matches EVERY candidate prefix ("h", "he", ...); only
         // the candidate whose offset lets match_next finish (offset ==
@@ -295,7 +294,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn match_fails_when_tail_cannot_consume_rest() {
         // The regex full-matches the slice "hello" (candidate offset 5),
         // but with no next element match_next requires expr_offset ==
@@ -306,7 +304,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn match_rejects_unanchored_substring_match() {
         // `l+` finds "ll" inside "hello" but never spans a whole candidate
         // slice, so no candidate wins.
@@ -316,7 +313,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn match_respects_nonzero_expr_offset() {
         let el = RegexPatternElement::new_rc(".+").unwrap();
         let mut result = MatchResult::new(0);
@@ -327,7 +323,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn failing_tail_forces_loop_to_continue() {
         // `h.+` full-matches as early as offset 2 ("he"), but the tail only
         // completes at offset 5; the element must keep iterating instead of
@@ -340,7 +335,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn regex_results_are_inserted_at_the_front_add_first() {
         // Chain <a+><b+><c+> and match "aabbcc". Java comment: "at this
         // point, all other regex results will have been added thus, we
@@ -363,7 +357,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on parse_utils"]
     fn match_extracts_capture_groups_end_to_end() {
         let el = RegexPatternElement::new_rc("a(b)?c").unwrap();
         let mut result = MatchResult::new(0);

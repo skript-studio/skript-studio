@@ -535,7 +535,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    #[ignore = "gated on compiler (Agent 5)"]
     fn compiled_keywords_of_the_name() {
         let pattern = crate::compile_pattern("[the] name").unwrap();
         assert_eq!(pattern.keywords, vec![simple("name", false, true)]);
@@ -543,7 +542,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on compiler (Agent 5)"]
     fn compiled_min_length_of_group_choice() {
         let pattern = crate::compile_pattern("(a|bb)").unwrap();
         assert_eq!(pattern.min_length, 1);

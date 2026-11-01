@@ -420,7 +420,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    #[ignore = "gated on compiler (Agent 5) and element match_ impls (Agents 1-4)"]
     fn end_to_end_match_the_name() {
         let pattern = crate::compile_pattern("[the] name").unwrap();
         assert_eq!(pattern.count_types(), 0);
@@ -450,7 +449,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "gated on compiler (Agent 5) and element match_ impls (Agents 1-4)"]
     fn end_to_end_match_choice_and_type() {
         let pattern = crate::compile_pattern("give %object% (a|an) apple").unwrap();
         assert_eq!(pattern.count_types(), 1);

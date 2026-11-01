@@ -172,7 +172,6 @@ fn ensure_java_engine_builds_embedded_registry() {
 /// checker's rules (or the resolver strategy) make garbage lines fail to
 /// match. See the `unparseable` rule in skript-checks' crate docs.
 #[test]
-#[ignore = "gated on check_document (Agent 9)"]
 fn java_port_flags_unparseable_line() {
     let state = AppState::new(EffectiveConfig::default());
 

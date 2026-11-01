@@ -52,7 +52,6 @@ fn corpus_shape() {
 /// than 13000 successful compiles; each failure is printed to stderr with
 /// its entry and error for triage.
 #[test]
-#[ignore = "gated on compiler+registry (integration)"]
 fn all_patterns_compile() {
     let mut reg = Registry::embedded().expect("embedded corpus must load");
     let failures = reg.compile_all();
@@ -93,7 +92,6 @@ fn all_patterns_compile() {
 /// non-empty text; the assertions focus on the literal/optional/choice
 /// machinery of the engine.
 #[test]
-#[ignore = "gated on compiler+registry (integration)"]
 fn spot_check_matching() {
     set_type_resolver(Rc::new(PermissiveResolver));
 

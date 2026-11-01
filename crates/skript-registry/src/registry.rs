@@ -418,7 +418,6 @@ mod tests {
     /// the backslash-restore fallback (`[(]` → `[\\(]`, a provable
     /// SkriptHub scraper artifact; see `compile_all`'s docs).
     #[test]
-    #[ignore = "gated on compiler (Agent 5)"]
     fn compile_all_embedded_expects_known_failures() {
         let mut reg = Registry::embedded().expect("embedded corpus must load");
         let failures = reg.compile_all();
