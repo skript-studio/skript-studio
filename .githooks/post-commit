@@ -1,0 +1,33 @@
+#!/bin/bash
+# .githooks/post-commit — keep skript-lsp synced with GitHub after every
+# commit (blueprint §7, adapted for skript-studio/skript-lsp).
+#
+# Enabled via: git config core.hooksPath .githooks
+# Failures never block the commit; sync retries on the next commit or on
+# the periodic cron run.
+set -u
+
+repo="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -n "${repo}" ] || exit 0
+
+sync="/home/z/my-project/scripts/git_sync.py"
+if [ -f "${sync}" ]; then
+  msg="$(python3 "${sync}" 2>&1)"
+  rc=$?
+  [ "${rc}" -ne 0 ] && msg="sync reported failure (rc=${rc}): ${msg}"
+  echo "[post-commit] ${msg}"
+  exit 0
+fi
+
+# --- fallback if git_sync.py is missing: plain push, never block the commit
+git symbolic-ref -q HEAD >/dev/null 2>&1 || exit 0
+wrapper="/home/z/my-project/scripts/git_ssh.py"
+if [ -f "${wrapper}" ]; then
+  export GIT_SSH_COMMAND="python3 ${wrapper}"
+fi
+remote="git@github.com:skript-studio/skript-lsp.git"
+git remote get-url --push origin >/dev/null 2>&1 && remote="origin"
+err="$(git push "${remote}" HEAD 2>&1)" \
+  && echo "[post-commit] auto-pushed $(git rev-parse --short HEAD) to ${remote}" \
+  || echo "[post-commit] push failed (will retry on next commit): ${err}" >&2
+exit 0

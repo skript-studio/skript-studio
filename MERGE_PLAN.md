@@ -242,11 +242,79 @@ No `.gitmodules`. No `.git/modules/`. No submodule gitlinks. Six Rust workspace 
 
 ## 10. Known post-merge limitations
 
-1. **Tauri crate does not compile in this sandbox.** `cargo check -p skript-studio` fails on `gdk-sys` (no GTK installed). This is environmental — the crate is correctly wired into the workspace. On a dev machine with GTK/webkit2gtk installed (or on Windows/macOS where Tauri uses native widgets), it compiles. The `default-members` setting ensures plain `cargo build`/`cargo test` skips Tauri and works everywhere.
+1. **`git subtree add` did not splice historical commits.** Each subtree commit is a single squashed "Add '...' from commit '...'" entry, not a merge with the source repo's history. This is `git subtree`'s default behavior. The source repos' full history still lives in their respective clones (and on GitHub until archived). If full history splicing is desired later, `git subtree add` with `--merge` or a `git filter-repo`-based approach would be needed. For this merge, the squashed approach was chosen because two of the three source repos only had 1 commit each anyway.
 
-2. **Cargo.lock includes Tauri's dep tree.** Even users who only want the LSP will download Tauri's transitive deps on first `cargo build`. This is unavoidable with workspace membership. Mitigation: `default-members` keeps build/test fast; the lockfile cost is one-time.
+2. **README.md still references the old layout.** The root `README.md` was not updated during this merge. It's a follow-up (see §8 item 5). `AGENTS.md` and `PORTING_CONTRACTS.md` were updated during the retirement step (see §11).
 
-3. **`git subtree add` did not splice historical commits.** Each subtree commit is a single squashed "Add '...' from commit '...'" entry, not a merge with the source repo's history. This is `git subtree`'s default behavior. The source repos' full history still lives in their respective clones (and on GitHub until archived). If full history splicing is desired later, `git subtree add` with `--merge` or a `git filter-repo`-based approach would be needed. For this merge, the squashed approach was chosen because two of the three source repos only had 1 commit each anyway.
+## 11. Standalone desktop app retirement
 
-4. **Docs still reference submodules.** `AGENTS.md` ("Repo structure" section), `PORTING_CONTRACTS.md` ("SUBMODULE — do not touch"), `README.md`, and `apps/skript-studio-ui/README.md` have stale references. Updating them is a follow-up (see §8 item 5).
+Executed 2026-11-01 on the same `merge/monorepo` branch, immediately after the merge.
+
+### Rationale
+
+The Tauri-based standalone desktop IDE (`apps/skript-studio-ui/`) is retired in favor of the VSCode extension (`extensions/vscode-skript/`) as the mainstream integration. The standalone app may be pulled back in the future if desired — git history preserves it.
+
+### Changes
+
+- `git rm -r apps/skript-studio-ui/` — removed the entire Tauri app (Rust `src-tauri/` + React/TS `src/` + configs). 70 files deleted.
+- `Cargo.toml` (root): removed `"apps/skript-studio-ui/src-tauri"` from `members`. Removed the now-redundant `default-members` block (all remaining members are LSP crates). Added a comment documenting the retirement and how to restore.
+- `Cargo.lock` regenerated: −4165 / +744 lines (Tauri's entire transitive dep tree — GTK, cairo, atk, webkit, etc. — dropped out). Lockfile shrank from ~6000 to 2249 lines. This also resolves the former §10 limitation "Cargo.lock includes Tauri's dep tree".
+- `AGENTS.md` updated: repo structure now shows 5 in-tree crates + 1 in-tree extension, no submodules, no `apps/`. Added "Standalone desktop app (retired)" section. Fixed `include_bytes!` → `include_dir!` stale reference.
+- `PORTING_CONTRACTS.md` updated: "SUBMODULE — do not touch" constraint on skript-core lifted (it's in-tree now). Workspace layout diagram corrected.
+
+### Restoration procedure (if the standalone app is ever pulled back)
+
+```bash
+# from the repo root, on a fresh branch
+git checkout <pre-retirement-sha> -- apps/skript-studio-ui/
+# re-add to workspace members in Cargo.toml:
+#   "apps/skript-studio-ui/src-tauri",
+# optionally re-add default-members if you want cargo build/test to skip Tauri
+cargo check --workspace
+```
+
+The subtree-add commit (`a6b94fb`) and the retirement commit together preserve the full history of the standalone app within this repo. The original `skript-studio` GitHub repo (until archived) also retains it.
+
+### Verification after retirement
+
+- `cargo check`: clean, 0 warnings, 0 errors.
+- `cargo test`: **576 passed / 0 failed / 18 ignored** — identical to pre-retirement. Zero regressions.
+- `Cargo.lock`: 2249 lines (was ~6000 with Tauri). No Tauri deps remain.
+
+### Updated commit graph
+
+```
+475ffe0 retire: remove standalone Tauri app, VSCode is now mainstream integration
+8cc97e5 docs: add MERGE_PLAN.md recording the monorepo consolidation
+e294f94 chore: regenerate workspace Cargo.lock with Tauri crate deps
+a05eb46 chore: integrate Tauri crate as workspace member
+1554255 Add 'extensions/vscode-skript/' from commit '247192c...'
+a6b94fb Add 'apps/skript-studio-ui/' from commit '5101a53...'  ← app added here
+8498fa6 Add 'crates/skript-core/' from commit 'c1b3c4f...'
+0293c58 chore: remove submodules in preparation for monorepo merge
+89bdbbb ... ← pre-merge-backup tag
+```
+
+### Updated final tree
+
+```
+skript-lsp/
+├── Cargo.toml              [workspace] 5 members (LSP crates only)
+├── Cargo.lock              2249 lines, no Tauri deps
+├── crates/
+│   ├── skript-core/        in-tree (was submodule)
+│   ├── skript-patterns/
+│   ├── skript-registry/
+│   ├── skript-checks/
+│   └── skript-lsp/         binary
+├── extensions/
+│   └── vscode-skript/      TS VSCode extension (mainstream integration)
+├── test-fixtures/
+├── scripts/
+├── .opencode/
+├── .superpowers/
+└── MERGE_PLAN.md
+```
+
+No `apps/` directory. Five Rust workspace members. VSCode extension is the sole UI integration.
 

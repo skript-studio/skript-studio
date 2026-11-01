@@ -15,17 +15,20 @@ Java sources: `/home/z/my-project/Skript/src/main/java/ch/njol/skript/`.
 
 ## Relationship to the skript-studio base
 
-This workspace is a checkout of https://github.com/skript-studio/skript-lsp
-(branch `port/java-pattern-engine`), which already ships:
+This workspace is the monorepo at https://github.com/skript-studio/skript-lsp
+(branch `merge/monorepo`), which contains:
 
-- `crates/skript-core` (git submodule) — lexer, parser, AST, semantics,
-  hover, completion, and a REGEX-APPROXIMATION of the pattern DSL
-  (`pattern.rs` compiles patterns to `regex::Regex`; e.g. it treats
+- `crates/skript-core` (in-tree, was a submodule) — lexer, parser, AST,
+  semantics, hover, completion, and a REGEX-APPROXIMATION of the pattern
+  DSL (`pattern.rs` compiles patterns to `regex::Regex`; e.g. it treats
   `[craft]` as a per-char class instead of Java's optional literal, and
   ignores `<regex>`, `:tag`, `¦mark`, `@time`, `*`/`~` flags).
 - `crates/skript-lsp` — a complete tower-lsp server (12 handler types,
   stdio + WebSocket) built on skript-core.
-- `extensions/vscode-skript`, `apps/skript-studio-ui` (submodules).
+- `extensions/vscode-skript` (in-tree, was a submodule) — the mainstream
+  VSCode integration.
+- `apps/skript-studio-ui/` was retired (standalone Tauri app); history
+  preserved in git log.
 
 Our three crates are the FAITHFUL Java port that slots alongside:
 
@@ -33,20 +36,24 @@ Our three crates are the FAITHFUL Java port that slots alongside:
 - `crates/skript-registry` — SkriptHub corpus loader + `compile_all` gate.
 - `crates/skript-checks` — diagnostics on top of the faithful engine.
 
-DO NOT modify `crates/skript-core` (submodule) or anything under
-`extensions/` / `apps/`. Integration happens in `crates/skript-lsp` only
-(Agent 10's task), behind config flags, without breaking existing tests.
+The original "DO NOT modify skript-core (submodule)" constraint no
+longer applies — skript-core is in-tree and may be modified directly.
+The `extensions/` directory is still owned by the VSCode extension
+upstream. Integration of the faithful engine happens in `crates/skript-lsp`
+behind config flags (`engine = "java-port"`).
 
 ## Workspace layout
 
 ```
-skript-lsp/                    (skript-studio checkout, work branch)
+skript-lsp/                    (monorepo, work branch: merge/monorepo)
 ├── crates/
-│   ├── skript-core/           # SUBMODULE — do not touch
-│   ├── skript-lsp/            # their server — Agent 10 integrates here
+│   ├── skript-core/           # in-tree (was submodule)
+│   ├── skript-lsp/            # LSP server — integrates the faithful engine
 │   ├── skript-patterns/       # OURS: faithful engine port
 │   ├── skript-registry/       # OURS: corpus loader + validation gate
 │   └── skript-checks/         # OURS: diagnostic rules
+├── extensions/
+│   └── vscode-skript/         # in-tree (was submodule)
 ├── PORTING_CONTRACTS.md
 └── env.sh
 ```

@@ -7,19 +7,11 @@ members = [
     "crates/skript-patterns",
     "crates/skript-registry",
     "crates/skript-checks",
-    # Tauri desktop app (was apps/skript-studio-ui submodule)
-    "apps/skript-studio-ui/src-tauri",
 ]
-# Default-members: what `cargo build` (no -p) compiles. Excluding the Tauri
-# crate here keeps plain `cargo build`/`cargo test` fast for LSP development;
-# Tauri is built explicitly via `cargo build -p skript-studio` or `bun tauri build`.
-default-members = [
-    "crates/skript-core",
-    "crates/skript-lsp",
-    "crates/skript-patterns",
-    "crates/skript-registry",
-    "crates/skript-checks",
-]
+# The standalone Tauri desktop app (apps/skript-studio-ui/) was retired in
+# favor of the VSCode extension as the mainstream integration. Its history
+# is preserved in commit a6b94fb (subtree add) and the retirement commit;
+# restore with `git checkout <pre-retirement-sha> -- apps/skript-studio-ui/`.
 
 [workspace.package]
 version = "0.1.0"
