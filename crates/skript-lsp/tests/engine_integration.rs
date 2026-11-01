@@ -1,26 +1,19 @@
 //! Integration tests for the diagnostic-merge wiring.
 //!
 //! These exercise the integration seam between the tower-lsp server and the
-//! faithful Java-port pattern engine:
+//! faithful pattern engine:
 //!
 //! * config plumbing — the `enabledAddons` / `installedPlugins`
 //!   initialization options parse into `InitOptions` and are carried by
 //!   `EffectiveConfig`;
 //! * the `LineDiagnostic` → LSP `Diagnostic` mapping used by
 //!   `publish_merged_diagnostics`;
-//! * `AppState::ensure_java_engine` — building the embedded corpus and
+//! * `AppState::ensure_engine` — building the embedded corpus and
 //!   compiling every pattern on the dedicated engine thread;
-//! * an end-to-end diagnostics check through `AppState::java_check`.
+//! * an end-to-end diagnostics check through
+//!   `AppState::check_document_via_engine`.
 //!
-//! The engine-dependent tests are `#[ignore]`-gated until the parallel
-//! porting agents land their implementations (the signatures are frozen,
-//! the bodies are not yet filled in):
-//!
-//! * Agent 5 — `skript_patterns::compile_pattern`
-//! * Agent 9 — `skript_checks::check_document`
-//!
-//! Run them once they land with `cargo test -p skript-lsp --test
-//! java_engine_integration -- --ignored`.
+//! Run with `cargo test -p skript-lsp --test engine_integration`.
 
 use skript_lsp::options::{EffectiveConfig, InitOptions};
 use skript_lsp::state::AppState;
@@ -55,14 +48,14 @@ fn effective_config_carries_checker_fields() {
     assert!(cfg.installed_plugins.is_empty());
 }
 
-/// A fresh state has no java engine; stats read `None` until it is built.
+/// A fresh state has no engine; stats read `None` until it is built.
 /// (Deliberately does NOT start the engine: with the pattern-compiler stubs
 /// still `todo!()`, starting would panic-build on the engine thread, which
 /// the server contains and reports as `Broken`.)
 #[test]
-fn java_engine_idle_on_fresh_state() {
+fn engine_idle_on_fresh_state() {
     let state = AppState::new(EffectiveConfig::default());
-    assert_eq!(state.java_engine_stats(), None);
+    assert_eq!(state.engine_stats(), None);
 }
 
 // --- diagnostics mapping ----------------------------------------------------
@@ -139,16 +132,16 @@ fn check_config_built_from_effective_config() {
 /// The engine builds the embedded corpus on its dedicated thread and
 /// compiles every split pattern exactly once.
 ///
-/// (This was temporarily `#[ignore]`-gated while Agent 5's `compile_pattern`
-/// was still a `todo!()` stub; the compiler has since landed and the build
+/// (This was temporarily `#[ignore]`-gated while the `compile_pattern`
+/// stub was still a `todo!()`; the compiler has since landed and the build
 /// completes, so the gate was removed.)
 #[test]
-fn ensure_java_engine_builds_embedded_registry() {
+fn ensure_engine_builds_embedded_registry() {
     let state = AppState::new(EffectiveConfig::default());
-    assert_eq!(state.java_engine_stats(), None, "engine starts unbuilt");
+    assert_eq!(state.engine_stats(), None, "engine starts unbuilt");
 
-    let failures = state.ensure_java_engine();
-    let stats = state.java_engine_stats().expect("stats after ensure");
+    let failures = state.ensure_engine();
+    let stats = state.engine_stats().expect("stats after ensure");
 
     // Corpus facts (PORTING_CONTRACTS.md): 8712 entries, 13661 split
     // patterns. Assert the contract's lower bound plus the compile
@@ -166,11 +159,11 @@ fn ensure_java_engine_builds_embedded_registry() {
     assert_eq!(stats.compile_failures, failures);
 
     // Idempotent: a second ensure neither rebuilds nor disagrees.
-    assert_eq!(state.ensure_java_engine(), failures);
-    assert_eq!(state.java_engine_stats(), Some(stats));
+    assert_eq!(state.ensure_engine(), failures);
+    assert_eq!(state.engine_stats(), Some(stats));
 }
 
-// --- end-to-end diagnostics (gated on Agent 9: check_document) --------------
+// --- end-to-end diagnostics (gated on check_document) -----------------------
 
 /// A script with one valid effect line and one garbage line yields exactly
 /// one `unparseable` Error diagnostic — on the garbage line (0-based line
@@ -184,13 +177,13 @@ fn ensure_java_engine_builds_embedded_registry() {
 /// checker's rules (or the resolver strategy) make garbage lines fail to
 /// match. See the `unparseable` rule in skript-checks' crate docs.
 #[test]
-fn java_port_flags_unparseable_line() {
+fn engine_flags_unparseable_line() {
     let state = AppState::new(EffectiveConfig::default());
 
     // Build the engine (blocks; the !Send registry lives on the engine
     // thread, so the check itself must go through the request channel).
-    state.ensure_java_engine();
-    assert!(state.java_engine_stats().is_some(), "engine must be ready");
+    state.ensure_engine();
+    assert!(state.engine_stats().is_some(), "engine must be ready");
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -199,8 +192,8 @@ fn java_port_flags_unparseable_line() {
 
     let script = "broadcast \"hi\"\nfrobnicate the widgets\n".to_owned();
     let diags = rt
-        .block_on(state.java_check(script, skript_checks::CheckConfig::default()))
-        .expect("the java engine must answer");
+        .block_on(state.check_document_via_engine(script, skript_checks::CheckConfig::default()))
+        .expect("the engine must answer");
 
     // Exactly one Error in the whole document …
     let errors: Vec<_> = diags

@@ -12,9 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 skript-core = { path = "../skript-core", default-features = false }
-# Java-faithful pattern engine port (branch: port/java-pattern-engine).
-# Wired in behind the `engine = "java-port"` init option; the default
-# (`core`) path only uses skript-core, as before.
+# Faithful Rust port of Skript's pattern-matching engine — the single
+# pattern engine used for line-based diagnostics and hover.
 skript-patterns = { path = "../skript-patterns" }
 skript-registry = { path = "../skript-registry" }
 skript-checks = { path = "../skript-checks" }

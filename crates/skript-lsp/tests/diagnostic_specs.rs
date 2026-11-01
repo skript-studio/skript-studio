@@ -6,10 +6,10 @@
 //! * **AST validator** (`skript_core::validation::validate_program`) —
 //!   produces `parse-error`, `unused-variable`, `semantic` codes. Driven
 //!   directly via the `ast_diagnostic_codes` helper.
-//! * **Java-port line checker** (`AppState::java_check` over
-//!   `skript_checks::check_document`) — produces `unparseable`,
+//! * **Pattern engine line checker** (`AppState::check_document_via_engine`
+//!   over `skript_checks::check_document`) — produces `unparseable`,
 //!   `addon-not-enabled`, `plugin-missing`, `ambiguous-addon` codes. Driven
-//!   via the `java_diagnostic_codes` helper, which lazily builds the
+//!   via the `engine_diagnostic_codes` helper, which lazily builds the
 //!   embedded corpus once per process (the engine thread is shared across
 //!   tests via `OnceLock`).
 //!
@@ -37,7 +37,7 @@ fn ast_diagnostic_codes(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// A shared `AppState` with the java-port engine already built. The engine
+/// A shared `AppState` with the pattern engine already built. The engine
 /// thread is process-global (it owns a `!Send` registry); tests share one
 /// via `OnceLock` so the ~13.7k-pattern corpus only compiles once per test
 /// run.
@@ -48,23 +48,23 @@ fn setup_state() -> AppState {
             let state = AppState::new(EffectiveConfig::default());
             // Build the engine synchronously on the test thread — the
             // registry compiles on its dedicated engine thread, and
-            // `ensure_java_engine` blocks until it is ready.
-            state.ensure_java_engine();
+            // `ensure_engine` blocks until it is ready.
+            state.ensure_engine();
             state
         })
         .clone()
 }
 
-/// Run the java-port line checker on `source` and return the diagnostic
-/// codes. Returns an empty `Vec` when the engine is unavailable (corpus
-/// load failure or panic).
-fn java_diagnostic_codes(state: &AppState, source: &str) -> Vec<String> {
+/// Run the pattern-engine line checker on `source` and return the
+/// diagnostic codes. Returns an empty `Vec` when the engine is unavailable
+/// (corpus load failure or panic).
+fn engine_diagnostic_codes(state: &AppState, source: &str) -> Vec<String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("test runtime");
     let config = build_check_config(&state.config());
-    match rt.block_on(state.java_check(source.to_owned(), config)) {
+    match rt.block_on(state.check_document_via_engine(source.to_owned(), config)) {
         Some(diags) => diags.into_iter().map(|d| d.code.to_owned()).collect(),
         None => Vec::new(),
     }
@@ -254,14 +254,14 @@ fn minimessage_tags_in_strings_parse_cleanly() {
 }
 
 // --------------------------------------------------------------------------
-// Java-port line checker — effect recognition
+// Pattern engine line checker — effect recognition
 // --------------------------------------------------------------------------
 
 #[test]
 fn valid_effect_lines_produce_no_unparseable() {
     let state = setup_state();
     let source = "broadcast \"hi\"\nsend \"hello\" to player\nset {_x} to 5";
-    let codes = java_diagnostic_codes(&state, source);
+    let codes = engine_diagnostic_codes(&state, source);
     assert!(
         !codes.iter().any(|c| c == "unparseable"),
         "valid effect lines must not produce `unparseable`, got {codes:?}"
@@ -272,7 +272,7 @@ fn valid_effect_lines_produce_no_unparseable() {
 fn garbage_line_produces_unparseable_or_ambiguous() {
     let state = setup_state();
     let source = "frobnicate the widgets";
-    let codes = java_diagnostic_codes(&state, source);
+    let codes = engine_diagnostic_codes(&state, source);
     // On the permissive resolver, garbage lines may match catch-all
     // patterns and surface as `ambiguous-addon` Info instead of
     // `unparseable`. Both are valid evidence that the line was *not*
@@ -290,7 +290,7 @@ fn garbage_line_produces_unparseable_or_ambiguous() {
 fn send_effect_is_recognized() {
     let state = setup_state();
     let source = "send \"hello\" to player";
-    let codes = java_diagnostic_codes(&state, source);
+    let codes = engine_diagnostic_codes(&state, source);
     assert!(
         !codes.iter().any(|c| c == "unparseable"),
         "`send` effect must be recognized by the line checker, got {codes:?}"
@@ -301,7 +301,7 @@ fn send_effect_is_recognized() {
 fn broadcast_effect_is_recognized() {
     let state = setup_state();
     let source = "broadcast \"hello everyone\"";
-    let codes = java_diagnostic_codes(&state, source);
+    let codes = engine_diagnostic_codes(&state, source);
     assert!(
         !codes.iter().any(|c| c == "unparseable"),
         "`broadcast` effect must be recognized by the line checker, got {codes:?}"
@@ -312,7 +312,7 @@ fn broadcast_effect_is_recognized() {
 fn set_variable_effect_is_recognized() {
     let state = setup_state();
     let source = "set {_x} to 5";
-    let codes = java_diagnostic_codes(&state, source);
+    let codes = engine_diagnostic_codes(&state, source);
     assert!(
         !codes.iter().any(|c| c == "unparseable"),
         "`set {{_x}} to 5` must be recognized by the line checker, got {codes:?}"
@@ -331,9 +331,9 @@ fn merged_pipeline_catches_both_parse_and_pattern_errors() {
     let source = "function test(:\n\tfrobnicate the widgets\n";
     let ast_codes = ast_diagnostic_codes(source);
     let state = setup_state();
-    let java_codes = java_diagnostic_codes(&state, source);
+    let engine_codes = engine_diagnostic_codes(&state, source);
     let mut merged: Vec<String> = ast_codes.clone();
-    merged.extend(java_codes.clone());
+    merged.extend(engine_codes.clone());
 
     assert!(
         merged.iter().any(|c| c == "parse-error"),
@@ -344,7 +344,7 @@ fn merged_pipeline_catches_both_parse_and_pattern_errors() {
         merged
             .iter()
             .any(|c| c == "unparseable" || c == "ambiguous-addon"),
-        "merged pipeline must include a java-port diagnostic for the garbage line, \
+        "merged pipeline must include a pattern-engine diagnostic for the garbage line, \
          merged = {merged:?}"
     );
 }

@@ -12,15 +12,18 @@
 //!
 //! # Diagnostics
 //!
-//! Diagnostics merge two complementary streams for maximum Skript parity:
-//!   1. **AST validator** (skript-core): parse-error, unused-variable,
-//!      semantic errors.
-//!   2. **Java-port line checker** (skript-checks over skript-registry +
-//!      skript-patterns, on a dedicated thread): unparseable,
-//!      addon-not-enabled, plugin-missing, ambiguous-addon.
+//! Diagnostics merge two complementary streams for maximum Skript parity.
+//! **Both always run** — there is no engine selection; the two streams are
+//! unconditional and their results are concatenated:
+//!
+//! - **AST validator** (skript-core): `parse-error`, `unused-variable`,
+//!   `semantic` errors.
+//! - **Pattern engine line checker** (skript-checks over skript-registry +
+//!   skript-patterns, on a dedicated thread): `unparseable`,
+//!   `addon-not-enabled`, `plugin-missing`, `ambiguous-addon`.
 //!
 //! The two streams produce different diagnostic codes and never duplicate.
-//! If the java-port engine is temporarily unavailable (still building or
+//! If the pattern engine is temporarily unavailable (still building or
 //! corpus load failure), only AST diagnostics are published until it
 //! becomes ready, then all open documents are re-validated.
 
@@ -178,7 +181,8 @@ fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnost
         .collect()
 }
 
-/// Publish merged diagnostics (AST + java-port line-based) for one document.
+/// Publish merged diagnostics (AST + pattern-engine line-based) for one
+/// document.
 ///
 /// Free function so it can be called from both the `Backend` method and the
 /// spawned engine-build task (which doesn't own a `Backend`).
@@ -190,7 +194,7 @@ async fn publish_merged_diagnostics(state: &AppState, client: &tower_lsp::Client
 
     let mut lsp_diags = core_lsp_diagnostics(state, uri, &text);
     if let Some(line_diags) = state
-        .java_check(text.clone(), build_check_config(&config))
+        .check_document_via_engine(text.clone(), build_check_config(&config))
         .await
     {
         lsp_diags.extend(line_diags.into_iter().map(line_diagnostic_to_lsp));
@@ -291,10 +295,9 @@ impl LanguageServer for Backend {
             let client = self.client.clone();
             tokio::spawn(async move {
                 let build_state = state.clone();
-                let failures =
-                    tokio::task::spawn_blocking(move || build_state.ensure_java_engine())
-                        .await
-                        .unwrap_or(usize::MAX);
+                let failures = tokio::task::spawn_blocking(move || build_state.ensure_engine())
+                    .await
+                    .unwrap_or(usize::MAX);
                 if failures == usize::MAX {
                     client
                         .log_message(
@@ -308,7 +311,7 @@ impl LanguageServer for Backend {
                     return;
                 }
                 let patterns = state
-                    .java_engine_stats()
+                    .engine_stats()
                     .map(|s| s.patterns_compiled)
                     .unwrap_or(0);
                 client
@@ -321,8 +324,8 @@ impl LanguageServer for Backend {
                     )
                     .await;
                 // The engine just became ready — re-publish merged
-                // diagnostics for every open document so the java-port line
-                // diagnostics show up alongside the AST ones.
+                // diagnostics for every open document so the pattern-engine
+                // line diagnostics show up alongside the AST ones.
                 let uris = state.doc_uris();
                 for uri in uris {
                     publish_merged_diagnostics(&state, &client, &uri).await;
@@ -530,7 +533,7 @@ impl LanguageServer for Backend {
         //    SyntaxEntry via EntryTable for markdown rendering.
         let syntax_hover = match self
             .state
-            .java_hover(line.to_string(), Some(pos.character as usize))
+            .hover_via_engine(line.to_string(), Some(pos.character as usize))
             .await
         {
             Some((entry_id, span)) => self

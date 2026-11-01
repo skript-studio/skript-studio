@@ -1,62 +1,43 @@
-# Porting Contracts (FROZEN API)
+# Porting Contracts (FROZEN API) — port COMPLETE
 
-This document is the single source of truth for cross-module APIs in the
-`skript-patterns` / `skript-registry` / `skript-checks` crates. **Multiple
-agents are porting different files in parallel.** Everything listed under
-"FROZEN" here must keep its exact signature; if something frozen blocks you,
-implement the closest approximation in YOUR files and report the friction in
-your final message.
+> **Status:** the faithful port of Skript's pattern-matching engine from
+> Java to Rust is **COMPLETE**. The FROZEN API sections below remain the
+> single source of truth for the public surface of `skript-patterns`,
+> `skript-registry`, and `skript-checks`; do not change them without a
+> deliberate, workspace-wide coordination. The "multiple agents porting
+> in parallel" framing is historical — the port shipped, the parallel
+> SDD tracking artifacts (`.superpowers/`, `.opencode/`, `MERGE_PLAN.md`)
+> were retired, and there is now one pattern engine in this repo.
 
 ## Project
 
 Faithful port of Skript's (v2.17.1) pattern-matching engine from Java to
 Rust, for a static-analysis LSP (diagnostics while typing; no runtime).
-Java sources: `/home/z/my-project/Skript/src/main/java/ch/njol/skript/`.
-
-## Relationship to the skript-studio base
-
-This workspace is the monorepo at https://github.com/skript-studio/skript-lsp
-(branch `merge/monorepo`), which contains:
-
-- `crates/skript-core` (in-tree, was a submodule) — lexer, parser, AST,
-  semantics, hover, completion, and a REGEX-APPROXIMATION of the pattern
-  DSL (`pattern.rs` compiles patterns to `regex::Regex`; e.g. it treats
-  `[craft]` as a per-char class instead of Java's optional literal, and
-  ignores `<regex>`, `:tag`, `¦mark`, `@time`, `*`/`~` flags).
-- `crates/skript-lsp` — a complete tower-lsp server (12 handler types,
-  stdio + WebSocket) built on skript-core.
-- `extensions/vscode-skript` (in-tree, was a submodule) — the mainstream
-  VSCode integration.
-- `apps/skript-studio-ui/` was retired (standalone Tauri app); history
-  preserved in git log.
-
-Our three crates are the FAITHFUL Java port that slots alongside:
-
-- `crates/skript-patterns` — 1:1 port of `ch.njol.skript.patterns`.
-- `crates/skript-registry` — SkriptHub corpus loader + `compile_all` gate.
-- `crates/skript-checks` — diagnostics on top of the faithful engine.
-
-The original "DO NOT modify skript-core (submodule)" constraint no
-longer applies — skript-core is in-tree and may be modified directly.
-The `extensions/` directory is still owned by the VSCode extension
-upstream. Integration of the faithful engine happens in `crates/skript-lsp`
-behind config flags (`engine = "java-port"`).
+Java sources of record: `/home/z/my-project/Skript/src/main/java/ch/njol/skript/`.
 
 ## Workspace layout
 
 ```
-skript-lsp/                    (monorepo, work branch: merge/monorepo)
+skript-lsp/                    (monorepo, branch: main)
 ├── crates/
-│   ├── skript-core/           # in-tree (was submodule)
-│   ├── skript-lsp/            # LSP server — integrates the faithful engine
-│   ├── skript-patterns/       # OURS: faithful engine port
-│   ├── skript-registry/       # OURS: corpus loader + validation gate
-│   └── skript-checks/         # OURS: diagnostic rules
+│   ├── skript-core/           # in-tree: lexer, parser, AST, semantics, EntryTable, AST validator
+│   ├── skript-lsp/            # LSP server — integrates the pattern engine
+│   ├── skript-patterns/       # FROZEN API: faithful pattern-engine port
+│   ├── skript-registry/       # FROZEN API: corpus loader + compile gate
+│   └── skript-checks/         # FROZEN API: line-based diagnostic rules
 ├── extensions/
-│   └── vscode-skript/         # in-tree (was submodule)
+│   └── vscode-skript/         # the sole UI: VSCode extension
 ├── PORTING_CONTRACTS.md
 └── env.sh
 ```
+
+The legacy regex-approximation pattern engine that used to live in
+`skript-core` (`pattern.rs` + the `SyntaxIndex` half of `matching.rs`)
+is **deleted**. `skript-core::matching` now contains only `EntryTable`
+(plain data, `Send + Sync`), which the LSP layer uses for completion and
+for resolving engine-thread hover matches back to `SyntaxEntry` records.
+The single source of truth for pattern matching is `skript-patterns` +
+`skript-registry`.
 
 ## Toolchain
 
@@ -66,9 +47,6 @@ skript-lsp/                    (monorepo, work branch: merge/monorepo)
 source /home/z/my-project/skript-studio/skript-lsp/env.sh
 cd /home/z/my-project/skript-studio/skript-lsp && cargo check -p skript-patterns
 ```
-
-Other agents run cargo concurrently; if you see "Blocking waiting for file
-lock", just wait.
 
 ## Rust conventions (apply everywhere)
 
@@ -192,6 +170,10 @@ pub enum Severity { Error, Warning, Info }
 pub struct LineDiagnostic { pub line: usize, pub col_start: usize, pub col_end: usize, pub severity: Severity, pub code: &'static str, pub message: String }
 pub struct CheckConfig { pub enabled_addons: HashSet<String>, pub installed_plugins: HashSet<String>, pub skript_version: Option<String>, pub minecraft_version: Option<String> }
 pub fn check_document(text: &str, registry: &Registry, config: &CheckConfig) -> Vec<LineDiagnostic>;
+
+// Hover helper used by the LSP layer through the engine thread.
+pub struct HoverMatch { pub entry_id: u32, pub span: (usize, usize) }
+pub fn match_line_for_hover(line: &str, cursor: Option<usize>, registry: &Registry) -> Option<HoverMatch>;
 ```
 
 ## Corpus facts (for tests)

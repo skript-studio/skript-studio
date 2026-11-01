@@ -1,142 +1,106 @@
-# REFACTOR_PLAN.md — Diagnostic merge + Engine-enum removal
+# REFACTOR_PLAN.md — what's done, what's next
 
-> **Status:** the diagnostic merge is **done**; the `Engine` enum is
-> **removed**. This document records the work and what remains.
+> **Status:** T2 (delete the legacy regex-approximation pattern engine and
+> route hover through the pattern-engine thread) is **COMPLETE**. The
+> `Engine` init-option that used to switch between AST-only and merged
+> diagnostics is also gone — diagnostics always merge both streams. This
+> file now just records what landed and lists the remaining future work.
 
-## 1. Goal
+## What landed
 
-Collapse the binary choice between the AST validator (skript-core) and the
-java-port line checker (skript-checks) into a single merged pipeline that
-runs both unconditionally and combines their results. Remove the
-`Engine` init-option and all branching that depended on it.
+### T2 — legacy regex-approximation engine deleted
 
-The motivation: the two streams produce **disjoint** diagnostic codes
-(`parse-error`/`unused-variable`/`semantic` vs.
-`unparseable`/`addon-not-enabled`/`plugin-missing`/`ambiguous-addon`), so
-they can never duplicate. Running both yields the strict superset of
-either alone, with no downside.
+- `crates/skript-core/src/pattern.rs` — **deleted** (was the regex-DSL
+  compiler that treated `[craft]` as a per-char class instead of Java's
+  optional literal and ignored `<regex>`, `:tag`, `¦mark`, `@time`,
+  `*`/`~` flags).
+- `crates/skript-core/src/matching.rs` — slimmed down to **`EntryTable`
+  only**. The `SyntaxIndex` half (regex-approximation matcher) is gone;
+  `EntryTable` is plain data (`Send + Sync`) and stays, because the LSP
+  layer uses it for completions and for resolving engine-thread hover
+  matches back to `SyntaxEntry` records.
+- The single pattern engine is now `skript-patterns` + `skript-registry`
+  (the faithful Java port). The `Engine` init-option and all branching
+  that depended on it were removed in the diagnostic-merge refactor.
 
-## 2. What was done
+### Hover through the pattern engine thread
 
-### 2.1 `Engine` enum removed (`crates/skript-lsp/src/options.rs`)
+- `AppState::hover_via_engine` (formerly `java_hover`) sends the line to
+  the dedicated engine thread, which runs
+  `skript_checks::match_line_for_hover` against all compiled patterns
+  and returns the best-matching entry ID + byte span.
+- The LSP `hover` handler then resolves the entry ID to a `SyntaxEntry`
+  via `EntryTable::get` and renders the syntax-doc markdown. AST-resolved
+  hover (for local variables, functions, etc.) takes priority when both
+  produce a result.
 
-- Deleted the `Engine` enum (Core / JavaPort variants, `as_str`,
-  `Display`, `Deserialize` impl — ~50 lines).
-- Removed the `engine: Option<Engine>` field from `InitOptions`.
-- Removed the `engine: Engine` field from `EffectiveConfig` and its
-  default.
-- Removed the `use serde::de::Error as _;` import (only the `Engine`
-  `Deserialize` impl needed it).
-- Replaced the engine-specific tests with three new tests:
-  `effective_config_defaults`, `init_options_parse_checker_lists`,
-  `init_options_fields_are_optional`.
+### Diagnostics always merge
 
-### 2.2 Merged diagnostics (`crates/skript-lsp/src/backend.rs`)
+- `publish_merged_diagnostics` unconditionally runs the AST validator
+  (`skript-core::validation`) and the pattern-engine line checker
+  (`skript_checks::check_document` via `AppState::check_document_via_engine`)
+  and concatenates their results. The two streams emit disjoint codes
+  (`parse-error`/`unused-variable`/`semantic` vs.
+  `unparseable`/`addon-not-enabled`/`plugin-missing`/`ambiguous-addon`),
+  so there is never a duplicate.
+- The engine is built unconditionally at startup (compiling ~13.7k
+  patterns takes a moment, so it runs on a background thread); until it
+  becomes ready only AST diagnostics are published, then all open
+  documents are re-validated.
 
-- Replaced the module-level "Diagnostics engine selection" comment with a
-  "Diagnostics" section that describes the merged two-stream pipeline.
-- Removed the `if config.engine == Engine::JavaPort { … } else { … }`
-  branch in `publish_diagnostics`. The method body is now a single call
-  to a new free function `publish_merged_diagnostics(&state, &client, uri)`.
-- The free function:
-  1. Runs `core_lsp_diagnostics` (AST validator).
-  2. Calls `state.java_check(...)`; if the engine responds, maps the
-     `LineDiagnostic`s to LSP `Diagnostic`s and **extends** the AST list.
-  3. Publishes the merged list via `client.publish_diagnostics`.
-  If the engine is still building or permanently broken, `java_check`
-  returns `None` and only AST diagnostics are published — exactly the
-  desired graceful-degradation behavior.
-- `initialize()` now spawns the engine-build task **unconditionally**
-  (the `if self.state.config().engine == Engine::JavaPort` guard is
-  gone). Log messages say "pattern engine" rather than "java-port
-  engine". After the engine becomes ready, the spawned task re-publishes
-  merged diagnostics for every open document via
-  `publish_merged_diagnostics(&state, &client, &uri)`.
+## Future work
 
-### 2.3 Test updates
+These items are intentionally **not** scheduled — pick them up when
+priorities warrant.
 
-- `crates/skript-lsp/tests/java_engine_integration.rs`: removed `Engine`
-  imports and assertions; renamed the two plumbing tests to
-  `init_options_expose_checker_lists` and
-  `effective_config_carries_checker_fields`; the
-  `java_port_flags_unparseable_line` ignored test now constructs the
-  state from `EffectiveConfig::default()` directly.
-- `crates/skript-lsp/tests/diagnostic_specs.rs` (new): 29 per-rule
-  contract tests covering both halves of the pipeline. The java-port
-  tests share a single `AppState` via `OnceLock` so the ~13.7k-pattern
-  corpus only compiles once per test run.
-- `crates/skript-lsp/tests/skript_official_suite.rs` (new): 4 tests over
-  the official Skript test corpus (573 `.sk` files, copied from
-  `Skript/src/test/skript/{tests,junit}`). The corpus is embedded via
-  `include_dir!`. Tests: no-panic over the whole corpus, AST baseline
-  diagnostic counts, ≥90% parse rate for `syntaxes/`, no-crash for
-  `regressions/`.
+### `java-*` identifier rename — **done in this commit**
 
-## 3. What remains
+The historical `java_*` / `Java*` naming in `crates/skript-lsp/src/state.rs`,
+`backend.rs`, and the test files was a leftover from the parallel-port era.
+It has been replaced with engine-agnostic names (`CheckRequest`,
+`EngineState`, `check_requests`, `engine_thread_main`, `start_engine`,
+`ensure_engine`, `check_document_via_engine`, `hover_via_engine`, …). No
+behavior change.
 
-### 3.1 Delete `crates/skript-core/src/pattern.rs` + `matching.rs` — **blocked**
+### Multi-file / workspace support
 
-The old regex-approximation pattern engine
-(`skript-core::pattern` + `skript-core::matching`) is now redundant: the
-java-port engine (`skript-patterns` + `skript-registry`) is the source of
-truth for pattern matching, and the AST validator
-(`skript-core::validation`) doesn't use the pattern index for
-diagnostics.
+The LSP currently treats every open document as an island — function and
+variable indexing is per-file. Cross-file go-to-definition, references,
+and rename (e.g. calling a function declared in another `.sk` file) need
+a workspace-wide symbol index that updates as documents change.
 
-**Why blocked:** the `Registry` type in `skript-registry` is `!Send`
-(its pattern elements are `Rc<RefCell<…>>`-based, frozen API). The
-`SyntaxIndex` and `EntryTable` types in `skript-core::matching` are
-`Send + Sync` and are used by `AppState` to serve completions and hover
-info from async tower-lsp handlers. Until either:
+### `.skriptrc.toml` hot-reload
 
-- the completion/hover paths are rewritten to query the java-port
-  `Registry` through the dedicated engine thread (the same channel
-  pattern `java_check` already uses), or
-- `skript-patterns`' API is changed to make its elements `Send` (a much
-  larger undertaking),
+`.skriptrc.toml` is read once during `initialize`. Watching the file
+(`notify`-based) and rebuilding the engine with a new addon filter would
+let users toggle addons without restarting the server.
 
-…the `Send`-safe `EntryTable` needs to stay. The old `pattern.rs`
-(regex-approximation DSL parser) could in principle be deleted today,
-but its only caller is `matching.rs` (which `EntryTable` depends on),
-so both have to go together.
+### Publish the VSCode extension to the Marketplace
 
-**Recommended next step:** port the completion and hover paths to the
-java-port engine thread. The pattern is established by
-`AppState::java_check`; a similar `java_complete(prefix, ctx) -> Vec<CompletionItem>`
-and `java_hover(line, col) -> Option<HoverInfo>` over the same channel
-would unblock the deletion.
+The extension is built and packaged via `bun run package`
+(`extensions/vscode-skript/`) but not yet published. Marketplace
+publishing requires a publisher ID, an icons set, and a stable version
+bump cadence.
 
-### 3.2 Keep `EntryTable` (it is `Send`-safe)
+### Precompute the SkriptHub corpus as bincode
 
-`skript-core::matching::EntryTable` is the lightweight lookup table
-built from the deserialized SkriptHub entries. It is plain data
-(`Vec<SyntaxEntry>`, no `Rc`, no `RefCell`) and trivially `Send + Sync`.
-**It should be kept** even after the deletion in §3.1: the LSP layer
-uses it for completions and hover, and there is no benefit to routing
-those through the java-port engine thread (the entry metadata is the
-same on both sides; only the *pattern-matching* differs).
+`Registry::embedded()` deserializes a 6.8 MB JSON corpus at startup and
+then compiles ~13.7k patterns. Shipping a precompiled `bincode` blob of
+the `Registry` (or at least of the per-entry `SkriptPattern`s) would
+shave the bulk of the build time off startup at the cost of a build-time
+codegen step.
 
-In other words: the end state is
-- `skript-core::matching::EntryTable` — **kept** (data only);
-- `skript-core::matching::SyntaxIndex` — **deleted** (regex-approximation
-  matcher, no longer needed);
-- `skript-core::pattern` — **deleted** (regex-approximation DSL parser).
+### Parser improvements for the remaining 4 official syntax files
 
-### 3.3 Out of scope
+The official Skript test corpus under
+`crates/skript-lsp/tests/fixtures/skript-official/` is parsed by the LSP
+test suite. Four files still produce parse errors that the upstream Java
+parser accepts; closing those gaps brings the AST validator to full
+parity with Skript's grammar for the regression + misc corpora.
 
-- **`skript-patterns` API rework.** The `!Send` `Rc<RefCell<…>>`-based
-  pattern elements are a faithful port of the Java API. Making them
-  `Send` would require either `Arc<Mutex<…>>` everywhere (perf hit) or a
-  fundamentally different ownership model. Not planned.
-- **`CheckConfig` versioning.** `skript-checks::CheckConfig` has
-  `skript_version` and `minecraft_version` fields that the LSP layer
-  always sets to `None`. Plumbing those through `initializationOptions`
-  is a separate feature.
+## Verification
 
-## 4. Verification
-
-`cargo test --workspace` post-refactor: **all tests pass**, no
-regressions. The diagnostic-merge tests
-(`crates/skript-lsp/tests/diagnostic_specs.rs`) and the official-corpus
-suite (`crates/skript-lsp/tests/skript_official_suite.rs`) are the
-contract that prevents the merge from silently regressing.
+`cargo test --workspace` post-refactor: **~614 tests pass**, 0 failures,
+2 ignored (the WebSocket smoke tests, gated behind a running server).
+`cargo clippy --workspace --all-targets -- -D warnings` is clean.
+`cargo fmt --all --check` is clean.

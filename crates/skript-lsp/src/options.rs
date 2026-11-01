@@ -2,7 +2,7 @@
 //!
 //! The server reads configuration from three sources, in order of precedence
 //! (highest first):
-//!   1. Command-line flags (set by the Tauri sidecar launcher)
+//!   1. Command-line flags (set by the VSCode extension or any launcher)
 //!   2. `initializationOptions` sent by the client in the LSP `initialize` request
 //!   3. Built-in defaults
 //!
@@ -80,17 +80,17 @@ pub struct SkriptRcToml {
 
 /// `initializationOptions` sent by the client. Every field is optional.
 ///
-/// The diagnostics engine is no longer configurable — both the AST validator
-/// and the java-port line checker always run and their results are merged for
-/// maximum Skript parity.
+/// The diagnostics engine is not configurable — both the AST validator
+/// and the pattern-engine line checker always run and their results are
+/// merged for maximum Skript parity.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct InitOptions {
     pub max_completions: Option<usize>,
-    /// Addons the java-port checker treats as enabled (empty/absent = all
+    /// Addons the pattern-engine checker treats as enabled (empty/absent = all
     /// addons enabled).
     pub enabled_addons: Option<Vec<String>>,
-    /// Plugins the java-port checker treats as installed.
+    /// Plugins the pattern-engine checker treats as installed.
     pub installed_plugins: Option<Vec<String>>,
     /// Skript version the target server runs (e.g. "2.6"). When set,
     /// the checker warns about syntax entries that require a higher
@@ -110,10 +110,10 @@ pub struct EffectiveConfig {
     /// Addon names to load syntax for, in addition to always-loaded "Skript".
     /// Empty = only load core Skript entries.
     pub extra_addons: Vec<String>,
-    /// Addons the java-port checker treats as enabled. Empty = all addons
+    /// Addons the pattern-engine checker treats as enabled. Empty = all addons
     /// are treated as enabled (no `addon-not-enabled` warnings).
     pub enabled_addons: Vec<String>,
-    /// Plugins the java-port checker treats as installed.
+    /// Plugins the pattern-engine checker treats as installed.
     pub installed_plugins: Vec<String>,
     /// Skript version the target server runs (e.g. "2.6"). When set,
     /// enables the `version-mismatch` diagnostic.

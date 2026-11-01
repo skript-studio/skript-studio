@@ -19,8 +19,8 @@ This is a Cargo workspace with five crates:
 
 | Crate | Type | Responsibility |
 |-------|------|----------------|
-| [`skript-core`](crates/skript-core) | lib | Pattern parsing, syntax index, completion, hover, validation, semantic tokens. Pure logic, no I/O. |
-| [`skript-patterns`](crates/skript-patterns) | lib | Faithful Rust port of Skript's Java pattern-matching engine. |
+| [`skript-core`](crates/skript-core) | lib | Pattern parsing, entry table, completion, hover, validation, semantic tokens. Pure logic, no I/O. |
+| [`skript-patterns`](crates/skript-patterns) | lib | Faithful Rust port of Skript's pattern-matching engine. The single source of truth for pattern matching. |
 | [`skript-registry`](crates/skript-registry) | lib | Loads the SkriptHub corpus into a compiled pattern registry. |
 | [`skript-checks`](crates/skript-checks) | lib | Line-based static diagnostic rules (`unparseable`, `addon-not-enabled`, `plugin-missing`, `ambiguous-addon`). |
 | [`skript-lsp`](crates/skript-lsp) | bin | The LSP server binary: stdio + WebSocket transport, `tower-lsp` wiring, embedded SkriptHub cache, lifecycle. |
@@ -32,20 +32,23 @@ Plus one TypeScript subdirectory:
 ## Diagnostics
 
 The server merges two complementary diagnostic streams for maximum Skript
-parity:
+parity. **Both always run** — there is no engine selection; the two
+streams are unconditional and their results are concatenated:
 
 1. **AST validator** (`skript-core`): `parse-error`, `unused-variable`,
-   `semantic`. These are the language-level checks that don't depend on
-   the pattern engine.
-2. **Java-port line checker** (`skript-checks` over `skript-registry` +
-   `skript-patterns`, on a dedicated thread): `unparseable`,
+   `semantic`. Language-level checks that don't depend on the pattern
+   engine.
+2. **Pattern engine line checker** (`skript-checks` over `skript-registry`
+   + `skript-patterns`, on a dedicated thread): `unparseable`,
    `addon-not-enabled`, `plugin-missing`, `ambiguous-addon`.
 
 The two streams produce disjoint diagnostic codes and never duplicate.
 The pattern engine is built unconditionally at startup (compiling ~13.7k
 patterns takes a moment, so it runs on a background thread); until it
 becomes ready only AST diagnostics are published, then all open documents
-are re-validated.
+are re-validated. Hover for syntax docs also goes through the engine
+thread (`hover_via_engine` → `match_line_for_hover`); AST-resolved hover
+on local symbols takes priority when both are available.
 
 ## Transport
 
@@ -157,20 +160,23 @@ entries.
 
 ## LSP capabilities advertised
 
-The server implements LSP 3.17 with the following capabilities:
+The server implements LSP 3.17 with full document sync (`textDocumentSync`
+kind = `Full`) plus 14 capabilities:
 
-1. `textDocumentSync` — full document sync
-2. `completion` — Skript syntax completion (trigger char: space)
-3. `hover` — syntax docs + AST-resolved hover rendered as Markdown
-4. `semanticTokens/full` — 9 token types (keyword, type, variable, string, comment, operator, event, function, number)
-5. `publishDiagnostics` — pushed on open/change, when the index becomes ready, and when the pattern engine becomes ready
-6. `documentSymbol` — top-level functions, commands, events, options blocks
-7. `foldingRange` — block structure (functions, events, commands, if/else, loops)
-8. `definition` — go-to-definition for variables and functions
-9. `references` — find all references for a symbol under the cursor
-10. `codeAction` — quick-fix scaffolding (placeholder for future rules)
-11. `signatureHelp` — function call signatures (trigger chars: `(`, `,`)
-12. `inlayHint` — type hints inferred from semantic analysis
+1. `completion` — Skript syntax completion (trigger char: space)
+2. `hover` — syntax docs (via the pattern engine thread) + AST-resolved hover rendered as Markdown
+3. `semanticTokens/full` — 9 token types (keyword, type, variable, string, comment, operator, event, function, number)
+4. `publishDiagnostics` — pushed on open/change, when the entry table becomes ready, and when the pattern engine becomes ready (merged AST + line-check streams)
+5. `documentSymbol` — top-level functions, commands, events, options blocks
+6. `foldingRange` — block structure (functions, events, commands, if/else, loops)
+7. `definition` — go-to-definition for variables and functions
+8. `references` — find all references for a symbol under the cursor
+9. `codeAction` — quick-fix scaffolding (placeholder for future rules)
+10. `signatureHelp` — function call signatures (trigger chars: `(`, `,`)
+11. `inlayHint` — type hints inferred from semantic analysis
+12. `rename` — rename variables and functions across the document
+13. `documentHighlight` — highlight occurrences of the symbol under the cursor
+14. `selectionRange` — expand/shrink selection by syntactic structure
 
 All features degrade gracefully before the SkriptHub cache loads and
 before the pattern engine becomes ready (empty completions, `null` hover,
@@ -182,17 +188,27 @@ AST-only diagnostics).
 # Type-check
 cargo check
 
-# Run unit + integration tests across the workspace
-cargo test
+# Run unit + integration tests across the workspace (~614 tests)
+cargo test --workspace
 
 # Run a specific test suite
 cargo test -p skript-lsp --test diagnostic_specs
 cargo test -p skript-lsp --test skript_official_suite
 
+# Benchmarks (criterion)
+cargo bench -p skript-registry
+
+# Parser fuzz harness
+cargo test -p skript-core --test fuzz_parser
+
 # End-to-end smoke test (requires a running server on :9876)
 cargo run -p skript-lsp -- --port 9876 --log-level info &
 cargo test -p skript-lsp --test smoke -- --ignored --nocapture
 ```
+
+CI runs `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, and
+`cargo test --workspace` on `ubuntu-latest`.
 
 ## SkriptHub cache
 

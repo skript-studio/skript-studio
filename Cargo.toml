@@ -3,15 +3,10 @@ resolver = "2"
 members = [
     "crates/skript-core",
     "crates/skript-lsp",
-    # Java-faithful pattern engine port (branch: port/java-pattern-engine)
     "crates/skript-patterns",
     "crates/skript-registry",
     "crates/skript-checks",
 ]
-# The standalone Tauri desktop app (apps/skript-studio-ui/) was retired in
-# favor of the VSCode extension as the mainstream integration. Its history
-# is preserved in commit a6b94fb (subtree add) and the retirement commit;
-# restore with `git checkout <pre-retirement-sha> -- apps/skript-studio-ui/`.
 
 [workspace.package]
 version = "0.1.0"
@@ -44,9 +39,9 @@ futures-util = "0.3"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 
-# task-2 dependencies
+# .skriptrc.toml + embedded SkriptHub cache dependencies
 toml = "0.8"
 include_dir = "0.7"
 
-# Java pattern-engine port dependencies
+# Pattern-engine port dependencies
 fancy-regex = "0.14"
