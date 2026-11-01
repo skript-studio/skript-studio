@@ -128,6 +128,17 @@ fn parse_if(parser: &mut Parser) -> Statement {
 
     let condition = parse_expression(parser);
 
+    // Consume any remaining natural-language tokens in the condition
+    // until `:`. Skript conditions like `if {_x} does not exist:` chain
+    // words without operators; the expression parser only consumes the
+    // first primary + binary ops.
+    while !matches!(
+        parser.peek_token(),
+        Token::Colon | Token::Newline | Token::Dedent | Token::Eof
+    ) {
+        parser.advance();
+    }
+
     parser.expect(&Token::Colon);
     let body = parse_block_body(parser);
 
@@ -202,6 +213,17 @@ fn parse_loop(parser: &mut Parser) -> Statement {
     if !matches!(parser.peek_token(), Token::Colon) {
         parse_expression(parser);
         if matches!(parser.peek_token(), Token::Identifier(ref s) if s == "times") {
+            parser.advance();
+        }
+        // Consume any remaining natural-language tokens until `:`.
+        // Skript loop expressions like `loop blocks within {_l1} and {_l2}`
+        // chain words without explicit operators; the expression parser
+        // only consumes the first primary + binary ops. The rest is
+        // natural-language filler that we skip to reach the `:`.
+        while !matches!(
+            parser.peek_token(),
+            Token::Colon | Token::Newline | Token::Dedent | Token::Eof
+        ) {
             parser.advance();
         }
     }

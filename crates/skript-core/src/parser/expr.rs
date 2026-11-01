@@ -337,6 +337,19 @@ fn parse_prefix(parser: &mut Parser) -> Expression {
         | Token::StrInterpolationStart
         | Token::MiniMessageOpen(_)
         | Token::MiniMessageClose(_) => parse_interpolation(parser),
+        Token::Keyword(s) => {
+            // Unknown keywords in expression context are treated as
+            // identifiers. Skript's natural-language syntax uses many
+            // keywords as part of expressions: `at`, `of`, `within`,
+            // `does`, `then`, etc. Treating them as identifiers lets the
+            // effect-fallback parser handle the whole line rather than
+            // erroring mid-expression.
+            parser.advance();
+            Expression::Variable(Variable {
+                name: s.to_string(),
+                span,
+            })
+        }
         _ => {
             parser.error(
                 format!("Unexpected token {:?} in expression", tok.token),

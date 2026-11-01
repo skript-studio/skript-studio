@@ -419,6 +419,12 @@ pub fn parse_event(parser: &mut Parser) -> EventDecl {
                 parts.push(k.to_string());
                 parser.advance();
             }
+            Token::String(ref s) => {
+                // Event arguments can be string literals:
+                // `on command "testing1":`
+                parts.push(format!("\"{s}\""));
+                parser.advance();
+            }
             _ => break,
         }
     }
@@ -535,7 +541,18 @@ pub fn parse_aliases_block(parser: &mut Parser) -> AliasesBlock {
     if parser.consume_if(&Token::Indent) {
         while !matches!(parser.peek_token(), Token::Dedent | Token::Eof) {
             let entry_start = parser.peek().span.start;
-            let source = parse_identifier_or_keyword(parser, "Expected alias source");
+
+            // The alias source can be multiple words: `test any boots`,
+            // `test ore`, `test any log`. Collect identifiers/keywords
+            // until we hit `=`.
+            let mut source_parts = Vec::new();
+            while !matches!(
+                parser.peek_token(),
+                Token::Equal | Token::Newline | Token::Dedent | Token::Eof
+            ) {
+                source_parts.push(parse_identifier_or_keyword(parser, "Expected alias source"));
+            }
+            let source = source_parts.join(" ");
 
             parser.expect(&Token::Equal);
             let target_tokens = collect_line_tokens(parser);
