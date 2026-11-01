@@ -92,6 +92,13 @@ pub struct InitOptions {
     pub enabled_addons: Option<Vec<String>>,
     /// Plugins the java-port checker treats as installed.
     pub installed_plugins: Option<Vec<String>>,
+    /// Skript version the target server runs (e.g. "2.6"). When set,
+    /// the checker warns about syntax entries that require a higher
+    /// addon version (the `version-mismatch` diagnostic).
+    pub skript_version: Option<String>,
+    /// Minecraft version the target server runs (e.g. "1.20.4").
+    /// Currently informational; reserved for future version-gated syntax.
+    pub minecraft_version: Option<String>,
 }
 
 /// Effective runtime configuration after merging CLI + init + defaults.
@@ -108,6 +115,11 @@ pub struct EffectiveConfig {
     pub enabled_addons: Vec<String>,
     /// Plugins the java-port checker treats as installed.
     pub installed_plugins: Vec<String>,
+    /// Skript version the target server runs (e.g. "2.6"). When set,
+    /// enables the `version-mismatch` diagnostic.
+    pub skript_version: Option<String>,
+    /// Minecraft version the target server runs (e.g. "1.20.4").
+    pub minecraft_version: Option<String>,
 }
 
 impl Default for EffectiveConfig {
@@ -117,6 +129,8 @@ impl Default for EffectiveConfig {
             extra_addons: Vec::new(),
             enabled_addons: Vec::new(),
             installed_plugins: Vec::new(),
+            skript_version: None,
+            minecraft_version: None,
         }
     }
 }

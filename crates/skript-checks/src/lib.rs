@@ -422,7 +422,57 @@ fn evaluate_matches(
         });
     }
 
-    // ---- Rule 4: `ambiguous-addon` (Info) — matches span >= 2 different
+    // ---- Rule 4: `version-mismatch` (Warning) — a matched entry's
+    // compatible_addon_version is higher than the configured skript_version.
+    // Only checked when skript_version is set (e.g. "2.6"). The version
+    // fields in SkriptHub are free-form strings like "2.0" or
+    // "1.0 (basic), 2.0 (extended)" — we extract the first numeric version
+    // and compare. ----
+    if let Some(ref target) = config.skript_version {
+        if let Some(target_ver) = parse_version(target) {
+            let mut incompatible: Vec<(String, String)> = Vec::new();
+            for entry_index in dedup_entry_indices(matches) {
+                let entry = &registry.entries()[entry_index];
+                let compat = &entry.compatible_addon_version;
+                if compat.is_empty() {
+                    continue;
+                }
+                if let Some(entry_ver) = parse_version(compat) {
+                    if entry_ver > target_ver {
+                        incompatible.push((entry.title.clone(), compat.clone()));
+                    }
+                }
+            }
+            if !incompatible.is_empty() {
+                let parts: Vec<String> = incompatible
+                    .iter()
+                    .take(LIST_LIMIT)
+                    .map(|(title, ver)| {
+                        format!(
+                            "syntax {} requires addon version {} (> {})",
+                            quote(title),
+                            ver,
+                            target
+                        )
+                    })
+                    .collect();
+                let mut message = parts.join("; ");
+                if incompatible.len() > LIST_LIMIT {
+                    message.push_str(&format!(" (and {} more)", incompatible.len() - LIST_LIMIT));
+                }
+                return Some(LineDiagnostic {
+                    line,
+                    col_start,
+                    col_end,
+                    severity: Severity::Warning,
+                    code: "version-mismatch",
+                    message,
+                });
+            }
+        }
+    }
+
+    // ---- Rule 5: `ambiguous-addon` (Info) — matches span >= 2 different
     // addons (case-insensitive names). ----
     let addons = matched_addon_names(matches, registry);
     if addons.len() >= 2 {
@@ -559,6 +609,50 @@ fn plugin_installed(plugin: &str, config: &CheckConfig) -> bool {
         .installed_plugins
         .iter()
         .any(|p| p.eq_ignore_ascii_case(plugin))
+}
+
+/// Parse the first version number from a free-form SkriptHub version string.
+///
+/// SkriptHub's `compatible_addon_version` is a free-form string like
+/// `"2.0"`, `"1.0 (basic), 2.0 (extended)"`, or
+/// `"1.0 (break), unknown (mine), 2.6 (BlockData support)"`. We extract
+/// the first `major.minor.patch` number we can find. Returns `None` if
+/// no version number is found.
+///
+/// Comparison: `(major, minor, patch)` tuples — `2.6 > 2.5 > 2.0 > 1.0`.
+fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
+    // Find the first run of digits, then try to parse major.minor.patch.
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && !bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return None;
+    }
+    // Parse major
+    let mut major = 0u32;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        major = major * 10 + (bytes[i] - b'0') as u32;
+        i += 1;
+    }
+    let mut minor = 0u32;
+    let mut patch = 0u32;
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            minor = minor * 10 + (bytes[i] - b'0') as u32;
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                patch = patch * 10 + (bytes[i] - b'0') as u32;
+                i += 1;
+            }
+        }
+    }
+    Some((major, minor, patch))
 }
 
 /// `"A, B, C (and 2 more)"` — first `limit` items plus an overflow count.
@@ -1229,5 +1323,42 @@ mod tests {
             "{}",
             ds[2].message
         );
+    }
+
+    // --- version parsing -----------------------------------------------
+
+    #[test]
+    fn parse_version_simple() {
+        assert_eq!(parse_version("2.0"), Some((2, 0, 0)));
+        assert_eq!(parse_version("2.6"), Some((2, 6, 0)));
+        assert_eq!(parse_version("1.20.4"), Some((1, 20, 4)));
+    }
+
+    #[test]
+    fn parse_version_free_form() {
+        // SkriptHub format: "1.0 (basic), 2.0 (extended)" → first version
+        assert_eq!(
+            parse_version("1.0 (basic), 2.0 (extended)"),
+            Some((1, 0, 0))
+        );
+        assert_eq!(
+            parse_version("1.0 (break), unknown (mine), 2.6 (BlockData support)"),
+            Some((1, 0, 0))
+        );
+    }
+
+    #[test]
+    fn parse_version_no_digits() {
+        assert_eq!(parse_version("unknown"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn parse_version_comparison() {
+        let v2_0 = parse_version("2.0").unwrap();
+        let v2_6 = parse_version("2.6").unwrap();
+        let v1_0 = parse_version("1.0").unwrap();
+        assert!(v2_6 > v2_0);
+        assert!(v2_0 > v1_0);
     }
 }

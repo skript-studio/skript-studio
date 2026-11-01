@@ -114,6 +114,12 @@ impl Backend {
         if let Some(plugins) = opts.installed_plugins {
             cfg.installed_plugins = plugins;
         }
+        if let Some(sv) = opts.skript_version {
+            cfg.skript_version = Some(sv);
+        }
+        if let Some(mv) = opts.minecraft_version {
+            cfg.minecraft_version = Some(mv);
+        }
         self.state.set_config(cfg);
     }
 
@@ -196,15 +202,12 @@ async fn publish_merged_diagnostics(state: &AppState, client: &tower_lsp::Client
 }
 
 /// Build the `skript-checks` configuration from the effective config.
-///
-/// `skript_version` / `minecraft_version` stay `None` for now — there is no
-/// client-facing option for them yet.
 pub fn build_check_config(config: &EffectiveConfig) -> skript_checks::CheckConfig {
     skript_checks::CheckConfig {
         enabled_addons: config.enabled_addons.iter().cloned().collect(),
         installed_plugins: config.installed_plugins.iter().cloned().collect(),
-        skript_version: None,
-        minecraft_version: None,
+        skript_version: config.skript_version.clone(),
+        minecraft_version: config.minecraft_version.clone(),
     }
 }
 
