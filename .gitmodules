@@ -1,9 +1,0 @@
-[submodule "crates/skript-core"]
-	path = crates/skript-core
-	url = https://github.com/skript-studio/skript-core.git
-[submodule "extensions/vscode-skript"]
-	path = extensions/vscode-skript
-	url = https://github.com/skript-studio/skript-studio-vscode.git
-[submodule "apps/skript-studio-ui"]
-	path = apps/skript-studio-ui
-	url = https://github.com/skript-studio/skript-studio.git
