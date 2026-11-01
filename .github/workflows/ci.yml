@@ -11,12 +11,8 @@ env:
 
 jobs:
   rust:
-    name: Rust (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: Rust
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -32,9 +28,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            linux-cargo-
 
       - name: Install Bun (for SkriptHub cache generation)
         uses: oven-sh/setup-bun@v2
