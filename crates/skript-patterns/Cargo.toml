@@ -1,0 +1,9 @@
+[package]
+name = "skript-patterns"
+version = "0.1.0"
+edition = "2021"
+description = "Port of Skript's Java pattern-matching engine (ch.njol.skript.patterns) for static analysis"
+
+[dependencies]
+regex = { workspace = true }
+fancy-regex = { workspace = true }

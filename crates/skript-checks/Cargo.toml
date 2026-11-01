@@ -1,0 +1,9 @@
+[package]
+name = "skript-checks"
+version = "0.1.0"
+edition = "2021"
+description = "Static diagnostic rules for Skript scripts"
+
+[dependencies]
+skript-patterns = { path = "../skript-patterns" }
+skript-registry = { path = "../skript-registry" }

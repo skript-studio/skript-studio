@@ -1,0 +1,10 @@
+[package]
+name = "skript-registry"
+version = "0.1.0"
+edition = "2021"
+description = "SkriptHub syntax corpus -> compiled pattern registry"
+
+[dependencies]
+skript-patterns = { path = "../skript-patterns" }
+serde = { workspace = true }
+serde_json = { workspace = true }
