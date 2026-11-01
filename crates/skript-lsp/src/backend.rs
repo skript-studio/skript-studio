@@ -10,19 +10,22 @@
 //! document symbols, folding, go-to-definition, references, signature help,
 //! inlay hints).
 //!
-//! # Diagnostics engine selection (Agent 10)
+//! # Diagnostics
 //!
-//! With the default `engine = "core"` init option, diagnostics come from
-//! the skript-core AST validator exactly as before. With
-//! `engine = "java-port"`, diagnostics are produced by the faithful
-//! Java-port checker (`skript-checks` over `skript-registry` +
-//! `skript-patterns`, running on its dedicated engine thread — see
-//! [`crate::state`]) and *replace* the skript-core ones; if that engine is
-//! unavailable, we fall back to the historical path. All other features
-//! (completion, hover, …) always stay on skript-core.
+//! Diagnostics merge two complementary streams for maximum Skript parity:
+//!   1. **AST validator** (skript-core): parse-error, unused-variable,
+//!      semantic errors.
+//!   2. **Java-port line checker** (skript-checks over skript-registry +
+//!      skript-patterns, on a dedicated thread): unparseable,
+//!      addon-not-enabled, plugin-missing, ambiguous-addon.
+//!
+//! The two streams produce different diagnostic codes and never duplicate.
+//! If the java-port engine is temporarily unavailable (still building or
+//! corpus load failure), only AST diagnostics are published until it
+//! becomes ready, then all open documents are re-validated.
 
 use crate::folding;
-use crate::options::{EffectiveConfig, Engine, InitOptions, SkriptRcToml};
+use crate::options::{EffectiveConfig, InitOptions, SkriptRcToml};
 use crate::state::AppState;
 use serde_json::Value;
 use skript_core::ast::Visitor;
@@ -105,9 +108,6 @@ impl Backend {
         if let Some(max) = opts.max_completions {
             cfg.max_completions = max;
         }
-        if let Some(engine) = opts.engine {
-            cfg.engine = engine;
-        }
         if let Some(addons) = opts.enabled_addons {
             cfg.enabled_addons = addons;
         }
@@ -131,48 +131,7 @@ impl Backend {
     }
 
     async fn publish_diagnostics(&self, uri: &str) {
-        let Some(text) = self.state.get_doc(uri) else {
-            return;
-        };
-
-        let config = self.state.config();
-
-        let lsp_diags: Vec<Diagnostic> = if config.engine == Engine::JavaPort {
-            // Java-port engine: diagnostics come from skript-checks (on the
-            // dedicated engine thread) and REPLACE the skript-core ones.
-            // Requests queue while the engine is still building; if it is
-            // unavailable, fall back to the historical core path.
-            let reply = self
-                .state
-                .java_check(text.clone(), build_check_config(&config))
-                .await;
-            match reply {
-                Some(line_diags) => {
-                    line_diags.into_iter().map(line_diagnostic_to_lsp).collect()
-                }
-                None => {
-                    tracing::warn!(
-                        uri = %uri,
-                        "java-port engine unavailable; falling back to core diagnostics"
-                    );
-                    core_lsp_diagnostics(&self.state, uri, &text)
-                }
-            }
-        } else {
-            core_lsp_diagnostics(&self.state, uri, &text)
-        };
-
-        let parsed = uri.parse::<tower_lsp::lsp_types::Url>().ok();
-        let parsed = match parsed {
-            Some(u) => u,
-            None => {
-                tracing::warn!(uri = %uri, "could not parse document URI; skipping diagnostics");
-                return;
-            }
-        };
-        self.client
-            .publish_diagnostics(parsed, lsp_diags, None)
-            .await;
+        publish_merged_diagnostics(&self.state, &self.client, uri).await;
     }
 }
 
@@ -185,8 +144,10 @@ fn severity_to_lsp(s: Severity) -> DiagnosticSeverity {
     }
 }
 
-/// skript-core AST validation mapped to LSP diagnostics — the historical
-/// `engine = "core"` path (moved verbatim out of `publish_diagnostics`).
+/// skript-core AST validation mapped to LSP diagnostics.
+///
+/// Produces: parse-error, unused-variable, semantic. These are the
+/// language-level checks that don't depend on the pattern engine.
 fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnostic> {
     // AST-based validation from cached snapshot
     let diags = state
@@ -209,6 +170,28 @@ fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnost
             ..Default::default()
         })
         .collect()
+}
+
+/// Publish merged diagnostics (AST + java-port line-based) for one document.
+///
+/// Free function so it can be called from both the `Backend` method and the
+/// spawned engine-build task (which doesn't own a `Backend`).
+async fn publish_merged_diagnostics(
+    state: &AppState,
+    client: &tower_lsp::Client,
+    uri: &str,
+) {
+    let Some(text) = state.get_doc(uri) else { return };
+    let config = state.config();
+
+    let mut lsp_diags = core_lsp_diagnostics(state, uri, &text);
+    if let Some(line_diags) = state.java_check(text.clone(), build_check_config(&config)).await {
+        lsp_diags.extend(line_diags.into_iter().map(line_diagnostic_to_lsp));
+    }
+
+    if let Ok(parsed) = uri.parse::<tower_lsp::lsp_types::Url>() {
+        client.publish_diagnostics(parsed, lsp_diags, None).await;
+    }
 }
 
 /// Build the `skript-checks` configuration from the effective config.
@@ -291,10 +274,13 @@ impl LanguageServer for Backend {
         // 2. Apply initializationOptions (highest precedence).
         self.apply_init_options(&params);
 
-        // 3. If the java-port engine was selected, build it now — off the
-        //    request thread (compiling ~13.7k patterns takes a moment) —
-        //    and report the outcome to the client at startup.
-        if self.state.config().engine == Engine::JavaPort {
+        // 3. Build the pattern engine unconditionally — off the request
+        //    thread (compiling ~13.7k patterns takes a moment) — and report
+        //    the outcome to the client at startup. The engine supplements the
+        //    AST validator with line-based diagnostics; until it is ready,
+        //    only AST diagnostics are published, then all open documents are
+        //    re-validated.
+        {
             let state = self.state.clone();
             let client = self.client.clone();
             tokio::spawn(async move {
@@ -308,7 +294,7 @@ impl LanguageServer for Backend {
                     client
                         .log_message(
                             tower_lsp::lsp_types::MessageType::ERROR,
-                            "skript-lsp: java-port engine unavailable \
+                            "skript-lsp: pattern engine unavailable \
                              (embedded corpus failed to load, or the pattern \
                              compiler panicked)"
                                 .to_owned(),
@@ -324,11 +310,18 @@ impl LanguageServer for Backend {
                     .log_message(
                         tower_lsp::lsp_types::MessageType::INFO,
                         format!(
-                            "skript-lsp: java-port engine enabled \
+                            "skript-lsp: pattern engine ready \
                              ({patterns} patterns, {failures} compile failures)"
                         ),
                     )
                     .await;
+                // The engine just became ready — re-publish merged
+                // diagnostics for every open document so the java-port line
+                // diagnostics show up alongside the AST ones.
+                let uris = state.doc_uris();
+                for uri in uris {
+                    publish_merged_diagnostics(&state, &client, &uri).await;
+                }
             });
         }
 

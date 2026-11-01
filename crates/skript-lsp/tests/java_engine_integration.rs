@@ -1,13 +1,13 @@
-//! Integration tests for the Java-port engine wiring (Agent 10).
+//! Integration tests for the diagnostic-merge wiring.
 //!
 //! These exercise the integration seam between the tower-lsp server and the
 //! faithful Java-port pattern engine:
 //!
-//! * config plumbing — the `engine` / `enabledAddons` / `installedPlugins`
+//! * config plumbing — the `enabledAddons` / `installedPlugins`
 //!   initialization options parse into `InitOptions` and are carried by
 //!   `EffectiveConfig`;
 //! * the `LineDiagnostic` → LSP `Diagnostic` mapping used by
-//!   `publish_diagnostics` when `engine = "java-port"`;
+//!   `publish_merged_diagnostics`;
 //! * `AppState::ensure_java_engine` — building the embedded corpus and
 //!   compiling every pattern on the dedicated engine thread;
 //! * an end-to-end diagnostics check through `AppState::java_check`.
@@ -22,24 +22,22 @@
 //! Run them once they land with `cargo test -p skript-lsp --test
 //! java_engine_integration -- --ignored`.
 
-use skript_lsp::options::{EffectiveConfig, Engine, InitOptions};
+use skript_lsp::options::{EffectiveConfig, InitOptions};
 use skript_lsp::state::AppState;
 use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Position};
 
 // --- config plumbing --------------------------------------------------------
 
-/// The new initialization options parse (camelCase, `"java"` alias).
+/// The initialization options parse (camelCase) into the checker lists.
 #[test]
-fn init_options_expose_engine_and_checker_lists() {
+fn init_options_expose_checker_lists() {
     let opts: InitOptions = serde_json::from_value(serde_json::json!({
-        "engine": "java",
         "enabledAddons": ["Skript", "SkBee"],
         "installedPlugins": ["Vault"],
         "maxCompletions": 250
     }))
     .expect("init options must parse");
 
-    assert_eq!(opts.engine, Some(Engine::JavaPort));
     assert_eq!(opts.max_completions, Some(250));
     assert_eq!(
         opts.enabled_addons,
@@ -48,20 +46,13 @@ fn init_options_expose_engine_and_checker_lists() {
     assert_eq!(opts.installed_plugins, Some(vec!["Vault".to_owned()]));
 }
 
-/// `EffectiveConfig` defaults to the historical core engine and an
-/// all-addons-enabled checker; the new fields are plain data that
-/// `apply_init_options` (backend) copies over.
+/// `EffectiveConfig` defaults to an all-addons-enabled checker; the fields
+/// are plain data that `apply_init_options` (backend) copies over.
 #[test]
-fn effective_config_carries_engine_fields() {
-    let mut cfg = EffectiveConfig::default();
-    assert_eq!(cfg.engine, Engine::Core);
+fn effective_config_carries_checker_fields() {
+    let cfg = EffectiveConfig::default();
     assert!(cfg.enabled_addons.is_empty(), "empty = all addons enabled");
     assert!(cfg.installed_plugins.is_empty());
-
-    cfg.engine = Engine::JavaPort;
-    cfg.enabled_addons = vec!["SkBee".to_owned()];
-    cfg.installed_plugins = vec!["Vault".to_owned()];
-    assert_eq!(cfg.engine, Engine::JavaPort);
 }
 
 /// A fresh state has no java engine; stats read `None` until it is built.
@@ -76,7 +67,7 @@ fn java_engine_idle_on_fresh_state() {
 
 // --- diagnostics mapping ----------------------------------------------------
 
-/// `LineDiagnostic` → LSP `Diagnostic` mapping used by the java-port
+/// `LineDiagnostic` → LSP `Diagnostic` mapping used by the merged
 /// diagnostics path.
 #[test]
 fn line_diagnostic_mapping_matches_contract() {
@@ -169,9 +160,9 @@ fn ensure_java_engine_builds_embedded_registry() {
 
 // --- end-to-end diagnostics (gated on Agent 9: check_document) --------------
 
-/// With `engine = JavaPort`, a script with one valid effect line and one
-/// garbage line yields exactly one `unparseable` Error diagnostic — on the
-/// garbage line (0-based line 1) — which maps onto an LSP ERROR.
+/// A script with one valid effect line and one garbage line yields exactly
+/// one `unparseable` Error diagnostic — on the garbage line (0-based line
+/// 1) — which maps onto an LSP ERROR.
 ///
 /// STATUS (observed 2026-11 with the first landed `check_document`): the
 /// garbage line currently matches a few very permissive multi-addon
@@ -183,9 +174,7 @@ fn ensure_java_engine_builds_embedded_registry() {
 #[test]
 #[ignore = "gated on check_document (Agent 9)"]
 fn java_port_flags_unparseable_line() {
-    let mut config = EffectiveConfig::default();
-    config.engine = Engine::JavaPort;
-    let state = AppState::new(config);
+    let state = AppState::new(EffectiveConfig::default());
 
     // Build the engine (blocks; the !Send registry lives on the engine
     // thread, so the check itself must go through the request channel).

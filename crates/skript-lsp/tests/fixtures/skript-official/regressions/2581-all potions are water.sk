@@ -1,0 +1,4 @@
+test "potion aliases":
+	assert speed potion is not water bottle with "potion alias: speed"
+	assert strength potion is not water bottle with "potion alias: strength"
+	assert long strength potion is not water bottle with "potion alias: long strength"

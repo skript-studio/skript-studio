@@ -1,0 +1,4 @@
+test "item durability":
+	set {_i} to a diamond sword
+	set durability of {_i} to 500
+	assert durability of {_i} != damage value of {_i} with "Durability of item should not equal damage value"

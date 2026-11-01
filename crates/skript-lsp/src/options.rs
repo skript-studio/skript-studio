@@ -10,7 +10,6 @@
 
 use clap::Parser;
 use serde::Deserialize;
-use serde::de::Error as _;
 
 /// Command-line flags accepted by the `skript-lsp` binary.
 ///
@@ -79,65 +78,17 @@ pub struct SkriptRcToml {
     pub addons: Vec<String>,
 }
 
-/// Which pattern-matching engine produces diagnostics.
-///
-/// `Core` (the default) is the historical behavior: skript-core's
-/// regex-approximation of the pattern DSL, feeding the AST validator.
-/// `JavaPort` routes *diagnostics* through the faithful Java-port engine
-/// (`skript-patterns` + `skript-registry` + `skript-checks`). Every other
-/// feature (completion, hover, symbols, …) stays on skript-core either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Engine {
-    /// skript-core regex-approximation patterns (historical behavior).
-    #[default]
-    Core,
-    /// Faithful port of Skript's Java pattern-matching engine.
-    JavaPort,
-}
-
-impl Engine {
-    /// The canonical name used in configuration/logs.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Engine::Core => "core",
-            Engine::JavaPort => "java-port",
-        }
-    }
-}
-
-impl std::fmt::Display for Engine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Accepts `"core"`, `"java-port"` (and the `"java"` alias),
-/// case-insensitively. Anything else is a deserialization error, which
-/// makes the whole `initializationOptions` object fail to parse and be
-/// ignored (the pre-existing behavior for malformed options).
-impl<'de> Deserialize<'de> for Engine {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.to_ascii_lowercase().as_str() {
-            "core" => Ok(Engine::Core),
-            "java-port" | "java" => Ok(Engine::JavaPort),
-            other => Err(D::Error::unknown_variant(other, &["core", "java-port", "java"])),
-        }
-    }
-}
-
 /// `initializationOptions` sent by the client. Every field is optional.
+///
+/// The diagnostics engine is no longer configurable — both the AST validator
+/// and the java-port line checker always run and their results are merged for
+/// maximum Skript parity.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct InitOptions {
     pub max_completions: Option<usize>,
-    /// Diagnostics engine: `"core"` (default) or `"java-port"`/`"java"`.
-    pub engine: Option<Engine>,
     /// Addons the java-port checker treats as enabled (empty/absent = all
-    /// addons enabled; only meaningful with `engine = "java-port"`).
+    /// addons enabled).
     pub enabled_addons: Option<Vec<String>>,
     /// Plugins the java-port checker treats as installed.
     pub installed_plugins: Option<Vec<String>>,
@@ -152,10 +103,6 @@ pub struct EffectiveConfig {
     /// Addon names to load syntax for, in addition to always-loaded "Skript".
     /// Empty = only load core Skript entries.
     pub extra_addons: Vec<String>,
-    /// Diagnostics engine. `Core` (the default) keeps the historical
-    /// skript-core validator; `JavaPort` swaps in the faithful Java-port
-    /// checker. See [`Engine`].
-    pub engine: Engine,
     /// Addons the java-port checker treats as enabled. Empty = all addons
     /// are treated as enabled (no `addon-not-enabled` warnings).
     pub enabled_addons: Vec<String>,
@@ -168,7 +115,6 @@ impl Default for EffectiveConfig {
         EffectiveConfig {
             max_completions: 100,
             extra_addons: Vec::new(),
-            engine: Engine::Core,
             enabled_addons: Vec::new(),
             installed_plugins: Vec::new(),
         }
@@ -212,50 +158,24 @@ mod tests {
         assert_eq!(cfg.max_completions, 100);
     }
 
-    // --- engine / java-port options (Agent 10) ---------------------------
+    // --- checker list options -------------------------------------------
 
     #[test]
-    fn effective_config_defaults_to_core_engine() {
+    fn effective_config_defaults() {
         let cfg = EffectiveConfig::default();
-        assert_eq!(cfg.engine, Engine::Core);
         assert!(cfg.enabled_addons.is_empty(), "empty = all addons enabled");
         assert!(cfg.installed_plugins.is_empty());
+        assert_eq!(cfg.max_completions, 100);
     }
 
     #[test]
-    fn engine_parses_core_java_port_and_java_alias() {
-        assert_eq!(
-            serde_json::from_value::<Engine>(serde_json::json!("core")).unwrap(),
-            Engine::Core
-        );
-        assert_eq!(
-            serde_json::from_value::<Engine>(serde_json::json!("java-port")).unwrap(),
-            Engine::JavaPort
-        );
-        assert_eq!(
-            serde_json::from_value::<Engine>(serde_json::json!("java")).unwrap(),
-            Engine::JavaPort
-        );
-        // Case-insensitive.
-        assert_eq!(
-            serde_json::from_value::<Engine>(serde_json::json!("Java-Port")).unwrap(),
-            Engine::JavaPort
-        );
-        // Unknown strings and non-strings are rejected.
-        assert!(serde_json::from_value::<Engine>(serde_json::json!("regex")).is_err());
-        assert!(serde_json::from_value::<Engine>(serde_json::json!(1)).is_err());
-    }
-
-    #[test]
-    fn init_options_parse_engine_and_checker_lists() {
+    fn init_options_parse_checker_lists() {
         let opts: InitOptions = serde_json::from_value(serde_json::json!({
-            "engine": "java",
             "enabledAddons": ["Skript", "SkBee"],
             "installedPlugins": ["Vault"],
             "maxCompletions": 250
         }))
         .unwrap();
-        assert_eq!(opts.engine, Some(Engine::JavaPort));
         assert_eq!(opts.max_completions, Some(250));
         assert_eq!(
             opts.enabled_addons,
@@ -265,9 +185,8 @@ mod tests {
     }
 
     #[test]
-    fn init_options_engine_fields_are_optional() {
+    fn init_options_fields_are_optional() {
         let opts: InitOptions = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(opts.engine, None);
         assert_eq!(opts.enabled_addons, None);
         assert_eq!(opts.installed_plugins, None);
         assert_eq!(opts.max_completions, None);

@@ -1,0 +1,17 @@
+test "whitelist":
+	reset whitelist
+	add test-offline-player to whitelist
+	assert test-offline-player is whitelisted with "Failed to whitelist a player"
+
+	remove test-offline-player from whitelist
+	assert test-offline-player is not whitelisted with "Failed to remove a player from whitelist"
+
+	add test-offline-player to whitelist
+	reset whitelist
+	assert whitelist is not set with "Failed to empty whitelist"
+
+test "enforce whitelist":
+	enforce whitelist
+	assert server whitelist is enforced with "Failed to enforce server whitelist"
+	unenforce whitelist
+	assert server whitelist is not enforced with "Failed to unenforce whitelist"
