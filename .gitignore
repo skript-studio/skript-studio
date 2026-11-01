@@ -34,3 +34,7 @@ crates/skript-lsp/data/skripthub/
 
 # Tauri sidecar binary (built by scripts/build-sidecar.ps1)
 apps/skript-studio-ui/src-tauri/skript-lsp-*.exe
+.secrets/
+# Z.ai sync mechanism
+
+# .secrets/ contains deploy keys (gitignored)
