@@ -28,9 +28,11 @@ nul
 stderr.log
 stdout.log
 
-# SkriptHub cache (regenerable per-addon files)
-crates/skript-lsp/data/skripthub/
-!crates/skript-lsp/data/skripthub/.gitkeep
+# SkriptHub corpus: per-addon files under crates/skript-lsp/data/skripthub/
+# and the aggregate crates/skript-registry/testdata/skripthub.json are
+# deliberately git-TRACKED (embedded at build time) — do NOT ignore them.
+# Legacy output path of normalize-cache.mjs (pre-retarget); never commit.
+crates/skript-lsp/data/skripthub-cache.json
 
 # Tauri sidecar binary (built by scripts/build-sidecar.ps1)
 apps/skript-studio-ui/src-tauri/skript-lsp-*.exe

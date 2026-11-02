@@ -63,11 +63,11 @@ cd extensions/vscode-skript
 bun install                              # install JS deps (vscode-languageclient, typescript, ...)
 bun run compile                          # JS output → out/
 bun run build:binary                     # release exe → bin/
-bun run package                          # vsce package → skript-studio-vscode.vsix
-bun run install                          # code --install-extension skript-studio-vscode.vsix
+bun run package                          # vsce package → skript-lsp.vsix
+bun run install-ext                        # code --install-extension skript-lsp.vsix
 bun run dev:install                      # all of the above: build → package → install
-bun run prepublish                       # build:binary → compile → package (no install)
-bun run download-cache                   # fetch SkriptHub data → ../../crates/skript-lsp/data/skripthub/
+bun run prepublish                       # build:binary → compile (no install)
+bun run download-cache                   # refresh SkriptHub corpus → ../../crates/skript-registry/testdata/skripthub.json
 ```
 
 `extension.ts` starts the LSP with `--stdio --log-level`. No network calls
@@ -94,7 +94,7 @@ loads only core Skript entries.
 
 ## Key constraints
 
-- `crates/skript-lsp/data/skripthub/` (per-addon cache files split by `extensions/vscode-skript/normalize-cache.mjs`) is gitignored and regenerable via `bun run download-cache`. `cargo build` fails if the directory is missing (embedded via `include_dir!`) — run that script first.
+- All SkriptHub corpus data is git-tracked: `crates/skript-lsp/data/skripthub/` (per-addon files, embedded via `include_dir!`) and `crates/skript-registry/testdata/skripthub.json` (aggregate corpus, embedded via `include_bytes!`). Fresh clones build with zero setup. `bun run download-cache` refreshes the aggregate corpus from the live API — commit data refreshes deliberately (the diff is large).
 - `nul` in `.gitignore` works around a Windows reserved-name phantom entry that appears in every directory listing.
 - LSP listens on `--port <n>` (WebSocket) or `--stdio`. The VSCode extension uses `--stdio`.
 - `skript-patterns`, `skript-registry`, and `skript-checks` have FROZEN public APIs (see `PORTING_CONTRACTS.md`); the port is COMPLETE.

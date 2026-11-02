@@ -33,10 +33,6 @@ jobs:
           restore-keys: |
             linux-cargo-
 
-      - name: Generate SkriptHub cache
-        working-directory: extensions/vscode-skript
-        run: curl -s https://skripthub.net/api/v1/addonsyntaxlist/ | node normalize-cache.mjs
-
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
