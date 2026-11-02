@@ -2,4 +2,3 @@ node_modules/
 out/
 bin/
 *.vsix
-bun.lock

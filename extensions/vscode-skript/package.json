@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/skript-studio/skript-lsp.git"
+    "url": "git+https://github.com/skript-studio/skript-studio.git"
   },
   "engines": {
     "vscode": "^1.91.0"
@@ -79,22 +79,26 @@
     "compile": "bun build --outdir out --target node --external vscode --format cjs --minify src/extension.ts",
     "typecheck": "tsc --noEmit",
     "watch": "bun --watch build --outdir out --target node --external vscode --format cjs src/extension.ts",
-    "download-cache": "curl -s https://skripthub.net/api/v1/addonsyntaxlist/ | node normalize-cache.mjs",
+    "package": "bunx --bun vsce package --no-dependencies --out skript-lsp.vsix",
+    "install-ext": "code --install-extension skript-lsp.vsix",
+    "dev:install": "bun run build:binary && bun run compile && bun run package && bun run install-ext",
+    "download-cache": "curl -s https://skripthub.net/api/v1/addonsyntaxlist/ | bun normalize-cache.mjs",
     "build:binary": "cargo build -p skript-lsp --release && Copy-Item -Force ..\\..\\target\\release\\skript-lsp.exe bin\\",
     "prepublish": "bun run build:binary && bun run compile"
   },
   "author": "",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/skript-studio/skript-lsp/issues"
+    "url": "https://github.com/skript-studio/skript-studio/issues"
   },
-  "homepage": "https://github.com/skript-studio/skript-lsp#readme",
+  "homepage": "https://github.com/skript-studio/skript-studio#readme",
   "dependencies": {
     "@types/vscode": "^1.125.0",
     "vscode-languageclient": "^10.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@vscode/vsce": "^4.1.0",
     "typescript": "^6.0.3"
   }
 }

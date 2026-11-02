@@ -1,4 +1,5 @@
 .vscodeignore
+.gitignore
 bun.lock
 normalize-cache.mjs
 tsconfig.json
