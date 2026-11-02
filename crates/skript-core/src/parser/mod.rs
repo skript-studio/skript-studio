@@ -383,12 +383,14 @@ mod fixture_tests {
             !result.program.items.is_empty(),
             "expected items in events.sk"
         );
-        let has_cmd = result
+        // The refreshed upstream fixture is purely event-based (on join /
+        // on quit / on damage / on inventory click — no command block).
+        let has_event = result
             .program
             .items
             .iter()
-            .any(|i| matches!(i, TopLevelItem::Command(_)));
-        assert!(has_cmd, "expected at least one command");
+            .any(|i| matches!(i, TopLevelItem::Event(_)));
+        assert!(has_event, "expected at least one event in events.sk");
     }
 
     #[test]

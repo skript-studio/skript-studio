@@ -37,10 +37,29 @@ streams are unconditional and their results are concatenated:
 
 1. **AST validator** (`skript-core`): `parse-error`, `unused-variable`,
    `semantic`. Language-level checks that don't depend on the pattern
-   engine.
+   engine. The AST parser is deliberately partial (it powers folding,
+   symbols, completion); the corpus line-checker is the authority for
+   "is this valid Skript", so `parse-error` is demoted to **Hint** by
+   default — set `parser_diagnostics = "error"` (or `"off"`) in
+   `.skriptrc.toml` to change that.
 2. **Pattern engine line checker** (`skript-checks` over `skript-registry`
    + `skript-patterns`, on a dedicated thread): `unparseable`,
    `addon-not-enabled`, `plugin-missing`, `ambiguous-addon`.
+
+   Line-checker semantics (tuned against the official SkriptLang example
+   scripts + real-world production scripts — see
+   `crates/skript-checks/tests/fixtures_corpus.rs`):
+   - `plugin-missing` fires only when **every** matching entry requires a
+         missing plugin — if any match (usually base Skript) is available
+         as-is, the line is fine.
+   - `ambiguous-addon` (Info) fires only when ≥ 2 addons match and the
+         base **Skript** plugin is **not** among them (addon overlap on
+         `send`/`set`/`broadcast` is the ecosystem's normal state).
+   - Command structure directives (`trigger:`, `permission:`,
+     `executable by:`, …), `options:` block entries, `### ###`
+     block comments, `using <feature>` directives and bare calls to
+     functions declared in the same document are recognized and skipped
+     — they carry no corpus syntax.
 
 The two streams produce disjoint diagnostic codes and never duplicate.
 The pattern engine is built unconditionally at startup (compiling ~13.7k
@@ -168,7 +187,12 @@ A per-project config file placed at the workspace root. Recognized keys:
 ```toml
 # Addons the project uses, in addition to core Skript. Only these addon
 # syntaxes are loaded; everything else is filtered out at startup.
-addons = ["SkBee", "SkQuery"]
+addons = ["SkBee", "FaweSK"]
+
+# How the AST parser's errors are surfaced: "error", "hint" (default) or
+# "off". The parser is deliberately partial; the corpus line-checker is
+# the validity authority, so hints are the default.
+parser_diagnostics = "hint"
 ```
 
 The file is optional; when absent the server loads only core Skript

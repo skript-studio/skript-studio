@@ -1,71 +1,44 @@
 
 #
-# A very simple `broadcast` command for broadcasting the text argument.
-# This is accessible only to users with the `skript.example.broadcast` permission.
+# This example listens for players joining and leaving.
+# Alters the default message when they do.
 #
 
-command /broadcast <text>:
-	permission: skript.example.broadcast
-	description: Broadcasts a message to everybody.
-	trigger:
-		broadcast arg-text
+on join:
+	set the join message to "Oh look, %player% joined! :)"
+
+on quit:
+	set the quit message to "Oh no, %player% left! :("
 
 #
-# A simple /home command that allows players to set, remove and travel to homes.
-# This command is executable only by players, and has a `correct usage` message.
-# The first argument is required, whereas the second is optional.
+# This example cancels damage for players if they have a specific permission.
+# If they don't, tell them how much damage they took.
 #
 
-command /home <text> [<text>]:
-	description: Set, delete or travel to your home.
-	usage: /home set/remove <name>, /home <name>
-	permission: skript.example.home
-	executable by: players
-	trigger:
-		if arg-1 is "set":
-			if arg-2 is set:
-				set {homes::%uuid of player%::%arg-2%} to player's location
-				send "Set your home <green>%arg-2%<reset> to <grey>%location of player%<reset>" to player
-			else:
-				send "You must specify a name for this home." to player
-		else if arg-1 is "remove":
-			if arg-2 is set:
-				delete {homes::%uuid of player%::%arg-2%}
-				send "Deleted your home <green>%arg-2%<reset>" to player
-			else:
-				send "You must specify the name of this home." to player
-		else if arg-2 is set:
-			send "Correct usage: /home set/remove <name>" to player
-		else if {homes::%uuid of player%::%arg-1%} is set:
-			teleport player to {homes::%uuid of player%::%arg-1%}
-		else:
-			send "You have no home named <green>%arg-1%<reset>." to player
+on damage:
+	victim is a player
+	if the victim has permission "skript.example.damage":
+		cancel the event # Stops the default behaviour - the victim taking damage.
+	else:
+		send "Ouch! You took %damage% damage." to the victim
+		add damage to {damage::%uuid of victim%::taken}
+		if the attacker is a player:
+			add damage to {damage::%uuid of attacker%::dealt}
 
 #
-# An /item command that accepts Skript item aliases.
-# E.g. `/item birch plank, 5 red wool and 17 iron ore`
-# This command has aliases - alternative versions of the command that can be used.
+# This example allows players to wear specified blocks as hats.
+# Listens for the clicking in the head slot and, if the player has permission, puts the item on their head.
 #
 
-aliases:
-	# Creates an alias `blacklisted` for this list of items.
-	blacklisted = TNT, bedrock, obsidian, spawner, lava, lava bucket
+aliases: # An alias for our allowed hat items.
+	custom helmets = iron block, gold block, diamond block
 
-command /item <items>:
-	description: Give yourself some items.
-	usage: /item <items...>
-	aliases: /i
-	executable by: players
-	permission: skript.example.item
-	cooldown: 30 seconds
-	cooldown message: You need to wait %remaining time% to use this command again.
-	cooldown bypass: skript.example.cooldown
-	trigger:
-		if player has permission "skript.example.item.all":
-			give argument to player
-		else:
-			loop argument:
-				if loop-item is not blacklisted:
-					give loop-item to player
-				else:
-					send "<red>%loop-item%<reset> is blacklisted and cannot be spawned." to player
+on inventory click:
+	event-slot is the helmet slot of player # Check that player clicked their head slot.
+	inventory action is place all or nothing
+	player has permission "skript.example.helmet"
+	cursor slot of player is custom helmets # Check if the item is in our custom alias.
+	cancel the event
+	set {_old helmet} to the helmet of player
+	set the helmet of player to the cursor slot of player
+	set the cursor slot of player to {_old helmet}

@@ -67,6 +67,7 @@ function buildClient(context: ExtensionContext): LanguageClient {
     },
     initializationOptions: {
       maxCompletions: config.get<number>("maxCompletions", 100),
+      parserDiagnostics: config.get<string>("parserDiagnostics", "hint"),
     },
     outputChannel,
     revealOutputChannelOn: RevealOutputChannelOn.Never,

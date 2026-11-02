@@ -91,10 +91,20 @@ impl SkriptPattern {
         &self.keywords
     }
 
-    /// Whether this pattern has no required literal text (no keywords) and
-    /// can therefore match nearly any input. See [`SkriptPattern::keywords`].
+    /// Whether this pattern can match nearly any input — no keywords AND no
+    /// required literal characters (`min_length == 0`).
+    ///
+    /// `keywords` alone is too strict a discriminator: the Java-faithful
+    /// keyword builder drops a whole choice when ANY alternative yields no
+    /// keyword (an empty alternative like `(neither|)`, or a nested group
+    /// like the last arm of `(move|walk|(turn[ing] around|rotate))`), which
+    /// wrongly classified Skript's own `Comparison`
+    /// (`(neither|) %objects% (…|\\>) %objects%`) and `On Move / Rotate`
+    /// (`[on] %entitydata% (move|walk|…)`) events as catch-alls and made
+    /// them invisible to line diagnostics. `min_length > 0` proves the
+    /// pattern demands some literal text, so it stays discriminative.
     pub fn is_catch_all(&self) -> bool {
-        self.keywords.is_empty()
+        self.keywords.is_empty() && self.min_length == 0
     }
 
     /// Port of `SkriptPattern.match(String, int, ParseContext)`:

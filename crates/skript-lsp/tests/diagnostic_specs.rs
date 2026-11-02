@@ -374,7 +374,7 @@ fn parse_errors_are_severity_error() {
 }
 
 #[test]
-fn unused_variable_is_severity_warning() {
+fn unused_variable_is_severity_hint() {
     let source = "function test():\n\tset {_x} to 5";
     let diags = validate_program(source);
     let unused: Vec<_> = diags
@@ -385,15 +385,21 @@ fn unused_variable_is_severity_warning() {
         !unused.is_empty(),
         "expected an unused-variable diagnostic, got {diags:?}"
     );
+    // Lint-level: set-but-never-read locals are a hint, not a warning —
+    // many valid showcase scripts write locals they never read back.
     for d in &unused {
         assert_eq!(
             d.severity,
-            Severity::Warning,
-            "unused-variable must have severity Warning, got {:?} for {:?}",
+            Severity::Hint,
+            "unused-variable must have severity Hint, got {:?} for {:?}",
             d.severity,
             d.message
         );
     }
+    // Reported exactly once (the semantic-error path no longer duplicates
+    // it) and at the declaration line (0-based line 1), not line 0.
+    assert_eq!(unused.len(), 1);
+    assert_eq!(unused[0].line, 1);
 }
 
 // --------------------------------------------------------------------------

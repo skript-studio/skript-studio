@@ -3,7 +3,11 @@
 //! OWNER: Agent 9. Line-based static analysis (v1). For each script line:
 //!  1. Skip blank lines and `#` comments (including trailing inline
 //!     comments, which are stripped by a tiny quote-aware scanner).
-//!  2. Classify: `on ...:` (event) / other `...:` (section head — section,
+//!  2. Skip recognized structure directives (`trigger:`, command metadata
+//!     keys like `permission message:`, bare `else:`/`otherwise:`) and
+//!     bare call lines of functions declared in the same document
+//!     (`my_func(...)`) — neither carries corpus syntax to match.
+//!  3. Classify: `on ...:` (event) / other `...:` (section head — section,
 //!     structure or condition) / otherwise (effect or condition).
 //!  3. Try matching against the compiled patterns of the corresponding
 //!     syntax types (a `TypeResolver` — usually `PermissiveResolver` — is
@@ -15,9 +19,12 @@
 //!  - `unparseable`          Error   — no pattern of any matching syntax type fits
 //!  - `addon-not-enabled`    Warning — only fits patterns from addons not in
 //!    `config.enabled_addons` (when non-empty)
-//!  - `plugin-missing`       Warning — matching entry requires plugins not in
-//!    `config.installed_plugins`
-//!  - `ambiguous-addon`      Info    — matches entries from >= 2 different addons
+//!  - `plugin-missing`       Warning — **every** matching entry requires
+//!    plugins not in `config.installed_plugins` (if any match is available
+//!    as-is, the line is fine)
+//!  - `ambiguous-addon`      Info    — matches span >= 2 different addons,
+//!    none of them the base Skript plugin (when Skript itself matches, addon
+//!    overlap is the ecosystem's normal state, not a problem)
 //!
 //! # Heuristics (documented divergences / approximations)
 //!
@@ -26,12 +33,12 @@
 //!   multi-line structures are still checked line-by-line.
 //! * **Classification.** `on ...:` (case-insensitive `on` + space, trailing
 //!   `:`) is an event. Any other `:`-terminated line is treated as a
-//!   *section head* with candidates `[Section, Structure, Condition]`:
-//!   most `:`-terminated lines are either sections (`loop %objects%:`),
-//!   structures (`command /home:`) or conditions carrying a section body
-//!   (`if player is op:`). Known limitation: `every 5 seconds:` (a real
-//!   Skript event without the `on` prefix) is classified as a head.
-//!   Everything else is a *statement* with candidates `[Effect, Condition]`.
+//!   *section head* with candidates `[Section, Structure, Condition,
+//!   Event]`; `on`-less periodic events (`every 5 seconds:`) also classify
+//!   as heads, which is why Event is among the candidates. Everything else
+//!   is a *statement* with candidates `[Effect, Condition, Section]` —
+//!   Section is included because the corpus types several plain effects
+//!   (notably `(wait|halt) [for] %timespan%`, "Delay") as sections.
 //! * **Inline comments.** A `#` outside double quotes starts a comment.
 //!   The scanner toggles quote state on every `"`; this is exactly right
 //!   for Skript string literals, where a literal quote inside a string is
@@ -108,11 +115,78 @@ pub fn check_document(
     // Computed once for the fallback `unparseable` message
     // ("no matching syntax in 174 addons" for the embedded corpus).
     let addon_count = distinct_addon_count(registry);
+    // User-declared functions (`function name(...)` in this document) —
+    // their bare call lines are valid statements the corpus knows
+    // nothing about.
+    let user_functions = declared_functions(text);
     let mut out = Vec::new();
+    // ### ... ### block-comment state (Skript multi-line comments).
+    let mut in_block_comment = false;
+    // Indent of an `options:` header while inside its block.
+    let mut options_indent: Option<usize> = None;
     for (line_no, raw) in text.lines().enumerate() {
+        // --- ### block comments --------------------------------------
+        let mut raw = raw;
+        if in_block_comment {
+            match unquoted_hash_runs(raw).iter().find(|(_, triple)| *triple) {
+                Some((pos, _)) => {
+                    // Closing ### on this line; code may continue after it.
+                    in_block_comment = false;
+                    raw = &raw[pos + 3..];
+                }
+                None => continue,
+            }
+        } else if let Some(first_triple) = unquoted_hash_runs(raw)
+            .iter()
+            .find(|(_, triple)| *triple)
+            .map(|(pos, _)| *pos)
+        {
+            // Opening ###: count further unquoted ### runs on this line.
+            let toggles = unquoted_hash_runs(raw)
+                .iter()
+                .filter(|(_, triple)| *triple)
+                .count();
+            if toggles % 2 == 1 {
+                in_block_comment = true;
+            }
+            // v1 keeps only the code before the first ### (text after an
+            // even number of toggles on one line is rare enough to drop).
+            raw = &raw[..first_triple];
+        }
+
+        // --- options: block entries ----------------------------------
+        if let Some(oi) = options_indent {
+            if raw.trim().is_empty() {
+                continue;
+            }
+            let indent = leading_whitespace(raw);
+            if indent > oi {
+                continue; // `name: value` option entry — not corpus syntax
+            }
+            options_indent = None; // block ended
+        }
+
+        if is_structure_directive(raw) {
+            let stripped = strip_inline_comment(raw).trim();
+            if stripped
+                .strip_suffix(':')
+                .is_some_and(|k| k.trim().eq_ignore_ascii_case("options"))
+            {
+                options_indent = Some(leading_whitespace(raw));
+            }
+            continue;
+        }
+        if is_using_directive(raw) {
+            continue;
+        }
         let Some(analyzed) = analyze_line(raw) else {
             continue;
         };
+        if analyzed.kind == LineKind::Statement
+            && is_user_function_call(&analyzed.stripped, &user_functions)
+        {
+            continue;
+        }
         let matches = collect_matches(&analyzed.stripped, analyzed.kind.candidates(), registry);
         if let Some(d) = evaluate_matches(
             line_no,
@@ -129,6 +203,149 @@ pub fn check_document(
         }
     }
     out
+}
+
+/// Structure directive keywords (case-insensitive), matched on the text
+/// before the first `:` of a line. Command metadata keys, `trigger:`, the
+/// `options:` header and bare chain markers — none of these are corpus
+/// syntax, and matching them against it produced false `unparseable`
+/// diagnostics on every command-heavy script.
+const STRUCTURE_DIRECTIVES: &[&str] = &[
+    "trigger",
+    "else",
+    "otherwise",
+    "options",
+    "description",
+    "usage",
+    "aliases",
+    "permission",
+    "permission message",
+    "executable by",
+    "cooldown",
+    "cooldown message",
+    "cooldown bypass",
+    "cooldown storage",
+    // Skript 2.10+ experimental example blocks (`using examples` files).
+    "example",
+    "examples",
+];
+
+/// Does this raw line look like `keyword:` / `keyword: value` where keyword
+/// is a known structure directive? Indentation and trailing comments are
+/// ignored; quotes are not (a `#` inside a string is not a comment).
+fn is_structure_directive(raw: &str) -> bool {
+    let code = strip_inline_comment(raw).trim();
+    if code.is_empty() {
+        return false;
+    }
+    let Some((key, _rest)) = code.split_once(':') else {
+        return false;
+    };
+    let key = key.trim().to_lowercase();
+    // Only bare-word keys — `command /home:` or `function f(a: text):`
+    // contain characters outside this class and never match.
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ')
+    {
+        return false;
+    }
+    STRUCTURE_DIRECTIVES.contains(&key.as_str())
+}
+
+/// Is this raw line a `using <feature>` directive (Skript 2.10+
+/// experimental features, e.g. `using script reflection`)? These carry no
+/// corpus syntax.
+fn is_using_directive(raw: &str) -> bool {
+    let code = strip_inline_comment(raw).trim_start();
+    code.len() >= 5
+        && code[..5].eq_ignore_ascii_case("using")
+        && code[5..].starts_with(char::is_whitespace)
+}
+
+/// Positions of `#` runs outside double quotes, flagged `triple` when the
+/// run is exactly `###` (Skript's multi-line comment toggle). Runs of other
+/// lengths (including `##` and `####`) are ordinary comments — only a
+/// bare `###` toggles a block.
+fn unquoted_hash_runs(line: &str) -> Vec<(usize, bool)> {
+    let mut out = Vec::new();
+    let mut in_quotes = false;
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                in_quotes = !in_quotes;
+                i += 1;
+            }
+            b'#' if !in_quotes => {
+                let start = i;
+                while i < bytes.len() && bytes[i] == b'#' {
+                    i += 1;
+                }
+                out.push((start, i - start == 3));
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// Number of leading whitespace characters of `line`.
+fn leading_whitespace(line: &str) -> usize {
+    line.chars().take_while(char::is_ascii_whitespace).count()
+}
+
+/// Function names declared via `function name(...)` in this document
+/// (lowercased). Line-based scan: the declaration line starts with the
+/// (case-insensitive) keyword `function` followed by a name and `(`.
+fn declared_functions(text: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for line in text.lines() {
+        let code = strip_inline_comment(line).trim_start();
+        let mut words = code.split_whitespace();
+        let Some(first) = words.next() else { continue };
+        if !first.eq_ignore_ascii_case("function") {
+            continue;
+        }
+        let Some(rest) = words.next() else { continue };
+        let name = rest.split('(').next().unwrap_or("");
+        if is_identifier(name) {
+            out.insert(name.to_lowercase());
+        }
+    }
+    out
+}
+
+fn is_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Is `stripped` a bare call statement to a user-declared function —
+/// `name(args...)` or `call name(args...)`, optionally with a trailing
+/// inline condition (`... if {_x} is set`)?
+fn is_user_function_call(stripped: &str, user_functions: &HashSet<String>) -> bool {
+    let mut body = stripped;
+    if let Some(rest) = body
+        .strip_prefix("call ")
+        .or_else(|| body.strip_prefix("CALL "))
+    {
+        body = rest;
+    }
+    // Name up to the opening paren.
+    let Some(paren) = body.find('(') else {
+        return false;
+    };
+    let name = body[..paren].trim_end();
+    if !is_identifier(name) {
+        return false;
+    }
+    user_functions.contains(&name.to_lowercase())
 }
 
 // ---------------------------------------------------------------------------
@@ -153,8 +370,18 @@ const HEAD_CANDIDATES: &[SyntaxType] = &[
     SyntaxType::Section,
     SyntaxType::Structure,
     SyntaxType::Condition,
+    // `on`-less periodic events (`every 2 minutes:`) are Event-typed in
+    // the corpus and carry no `on ` prefix, so they classify as heads.
+    SyntaxType::Event,
 ];
-const STATEMENT_CANDIDATES: &[SyntaxType] = &[SyntaxType::Effect, SyntaxType::Condition];
+const STATEMENT_CANDIDATES: &[SyntaxType] = &[
+    SyntaxType::Effect,
+    SyntaxType::Condition,
+    // The corpus mistypes several plain effects as sections — most visibly
+    // "Delay" (`(wait|halt) [for] %timespan%`). Without Section here,
+    // `wait 1 second` is reported unparseable.
+    SyntaxType::Section,
+];
 
 impl LineKind {
     fn candidates(self) -> &'static [SyntaxType] {
@@ -459,9 +686,13 @@ fn evaluate_matches(
         });
     }
 
-    // ---- Rule 3: `plugin-missing` (Warning) — some matched entry
-    // requires plugins that are not in `installed_plugins`. ----
+    // ---- Rule 3: `plugin-missing` (Warning) — **every** matched entry
+    // requires plugins not in `installed_plugins`. If any match is
+    // available as-is (no unmet plugin requirements), the line is fine —
+    // the base Skript entry usually covers it and what a distant addon
+    // *also* requires is irrelevant. ----
     let mut missing: Vec<(String, Vec<String>)> = Vec::new();
+    let mut any_available = false;
     for entry_index in dedup_entry_indices(matches) {
         let entry = &registry.entries()[entry_index];
         let mut missing_plugins: Vec<String> = entry
@@ -471,11 +702,13 @@ fn evaluate_matches(
             .map(|p| p.name.clone())
             .collect();
         missing_plugins.dedup();
-        if !missing_plugins.is_empty() {
-            missing.push((entry.title.clone(), missing_plugins));
+        if missing_plugins.is_empty() {
+            any_available = true;
+            break;
         }
+        missing.push((entry.title.clone(), missing_plugins));
     }
-    if !missing.is_empty() {
+    if !missing.is_empty() && !any_available {
         let parts: Vec<String> = missing
             .iter()
             .take(LIST_LIMIT)
@@ -552,9 +785,13 @@ fn evaluate_matches(
     }
 
     // ---- Rule 5: `ambiguous-addon` (Info) — matches span >= 2 different
-    // addons (case-insensitive names). ----
+    // addons (case-insensitive names), **none of them the base Skript
+    // plugin**. The base plugin ships with every server: when Skript's own
+    // syntax matches, other addons also implementing the line is the
+    // ecosystem's normal state (send/set/broadcast exist in a dozen
+    // addons), not something to surface. ----
     let addons = matched_addon_names(matches, registry);
-    if addons.len() >= 2 {
+    if addons.len() >= 2 && !addons.iter().any(|a| a.eq_ignore_ascii_case("skript")) {
         return Some(LineDiagnostic {
             line,
             col_start,
@@ -833,7 +1070,11 @@ mod tests {
             {"id": 9, "json_id": "EffSpawnNpc", "title": "Spawn NPC",
              "syntax_type": "effect", "syntax_pattern": "spawn npc %string%",
              "addon": {"name": "skript-citizens"},
-             "required_plugins": [{"name": "Citizens"}, {"name": "Vault"}]}
+             "required_plugins": [{"name": "Citizens"}, {"name": "Vault"}]},
+            {"id": 10, "json_id": "EffOpenGui", "title": "Open GUI",
+             "syntax_type": "effect", "syntax_pattern": "open gui %string%",
+             "addon": {"name": "skript-gui"},
+             "required_plugins": [{"name": "Vault"}]}
         ]"#;
         Registry::from_json_str(JSON).expect("mini registry must parse")
     }
@@ -1057,18 +1298,18 @@ mod tests {
         let d = check_line_inner("xyzzy", LineKind::Statement, &reg, &cfg).unwrap();
         assert_eq!(
             d.message,
-            "unparseable effect (no matching syntax in 3 addons): \"xyzzy\""
+            "unparseable effect (no matching syntax in 4 addons): \"xyzzy\""
         );
         // Kind names: event / section / effect.
         let d = check_line_inner("xyzzy", LineKind::Event, &reg, &cfg).unwrap();
         assert_eq!(
             d.message,
-            "unparseable event (no matching syntax in 3 addons): \"xyzzy\""
+            "unparseable event (no matching syntax in 4 addons): \"xyzzy\""
         );
         let d = check_line_inner("xyzzy", LineKind::Head, &reg, &cfg).unwrap();
         assert_eq!(
             d.message,
-            "unparseable section (no matching syntax in 3 addons): \"xyzzy\""
+            "unparseable section (no matching syntax in 4 addons): \"xyzzy\""
         );
         // The placeholder span covers the whole stripped text.
         assert_eq!((d.col_start, d.col_end), (0, 5));
@@ -1121,12 +1362,21 @@ mod tests {
         .is_none());
 
         // A single enabled match is enough to stop the rule; with a second
-        // addon present it degrades to ambiguous-addon instead.
+        // addon present it can only degrade to ambiguous-addon when the
+        // base Skript plugin is NOT among the matches — with Skript
+        // present the ambiguity is suppressed entirely (addon overlap is
+        // normal when the base plugin matches).
         let cfg = CheckConfig {
             enabled_addons: addons(&["Skript"]),
             ..Default::default()
         };
-        let d = eval(&reg, &cfg, LineKind::Statement, "kill all players", &[2, 3]).unwrap();
+        assert!(
+            eval(&reg, &cfg, LineKind::Statement, "kill all players", &[2, 3]).is_none(),
+            "Skript + SkBee ambiguity must be suppressed"
+        );
+        // SkBee + skript-gui (no Skript): ambiguity still reported.
+        let cfg_all = CheckConfig::default();
+        let d = eval(&reg, &cfg_all, LineKind::Statement, "x", &[1, 9]).unwrap();
         assert_eq!(d.code, "ambiguous-addon");
     }
 
@@ -1182,10 +1432,19 @@ mod tests {
         let d = eval(&reg, &cfg, LineKind::Statement, "x", &[8]).unwrap();
         assert_eq!(d.message, "syntax \"Spawn NPC\" requires plugin(s): Vault");
 
-        // Priority: plugin-missing beats ambiguous-addon (nothing installed).
+        // Priority: plugin-missing beats ambiguous-addon (nothing
+        // installed, EVERY match requires a missing plugin).
         let cfg = CheckConfig::default();
-        let d = eval(&reg, &cfg, LineKind::Statement, "x", &[6, 1]).unwrap();
+        let d = eval(&reg, &cfg, LineKind::Statement, "x", &[8, 9]).unwrap();
         assert_eq!(d.code, "plugin-missing");
+
+        // If ANY match is available as-is (no unmet plugin requirements),
+        // plugin-missing does not fire — the line is simply fine, or
+        // degrades to ambiguity when no Skript entry matched.
+        let d = eval(&reg, &cfg, LineKind::Statement, "x", &[6, 1]).unwrap();
+        assert_eq!(d.code, "ambiguous-addon");
+        let d = eval(&reg, &cfg, LineKind::Statement, "x", &[6, 2]);
+        assert!(d.is_none());
     }
 
     #[test]
@@ -1209,14 +1468,17 @@ mod tests {
         .unwrap();
         assert_eq!(d.code, "addon-not-enabled");
 
-        // Ambiguous: two different addons, everything enabled.
-        let d = eval(&reg, &cfg, LineKind::Statement, "kill all players", &[2, 3]).unwrap();
+        // Ambiguous: two different non-Skript addons, everything enabled.
+        let d = eval(&reg, &cfg, LineKind::Statement, "x", &[1, 9]).unwrap();
         assert_eq!(d.code, "ambiguous-addon");
         assert_eq!(d.severity, Severity::Info);
         assert_eq!(
             d.message,
-            "matches entries from multiple addons: Skript, SkBee"
+            "matches entries from multiple addons: SkBee, skript-gui"
         );
+
+        // Skript + SkBee: ambiguity suppressed (base plugin matched).
+        assert!(eval(&reg, &cfg, LineKind::Statement, "kill all players", &[2, 3]).is_none());
 
         // Single addon, no plugins, all enabled -> no diagnostic.
         assert!(eval(&reg, &cfg, LineKind::Statement, "detonate creepers", &[0]).is_none());
@@ -1263,7 +1525,7 @@ mod tests {
         assert_eq!(ds[2].code, "unparseable");
         assert_eq!(
             ds[2].message,
-            "unparseable effect (no matching syntax in 3 addons): \"set {_x} to 5\""
+            "unparseable effect (no matching syntax in 4 addons): \"set {_x} to 5\""
         );
     }
 
@@ -1301,12 +1563,13 @@ mod tests {
 
         // Lines 0/1 skipped, 2 (event), 3 (section head) and 4 (effect)
         // match enabled Skript syntax with no plugin needs -> clean.
-        // Lines 5..=8 hit the four rules in order.
-        assert_eq!(ds.len(), 4, "{ds:?}");
+        // Lines 5..=7 hit the rules in order. Line 8 (`kill all players`)
+        // matches Skript + SkBee — ambiguity suppressed (base plugin).
+        assert_eq!(ds.len(), 3, "{ds:?}");
         assert_eq!((ds[0].line, ds[0].code), (5, "unparseable"));
         assert_eq!(
             ds[0].message,
-            "unparseable effect (no matching syntax in 3 addons): \"frobnicate the widget\""
+            "unparseable effect (no matching syntax in 4 addons): \"frobnicate the widget\""
         );
         assert_eq!((ds[0].col_start, ds[0].col_end), (0, 21));
 
@@ -1317,18 +1580,11 @@ mod tests {
             "only matches addons that are not enabled: SkBee"
         );
 
-        assert_eq!((ds[2].line, ds[2].code), (7, "plugin-missing"));
+        assert_eq!((ds[2].line, ds[2].code), (7, "plugin-missing"), "{ds:?}");
         assert_eq!(ds[2].severity, Severity::Warning);
         assert_eq!(
             ds[2].message,
             "syntax \"Despawn Citizen\" requires plugin(s): Citizens"
-        );
-
-        assert_eq!((ds[3].line, ds[3].code), (8, "ambiguous-addon"));
-        assert_eq!(ds[3].severity, Severity::Info);
-        assert_eq!(
-            ds[3].message,
-            "matches entries from multiple addons: Skript, SkBee"
         );
     }
 
@@ -1377,30 +1633,19 @@ mod tests {
         for pair in ds.windows(2) {
             assert!(pair[0].line < pair[1].line, "duplicate line: {ds:?}");
         }
-        // Lines 0/1 skipped. Since the catch-all filter landed, `on join:`
-        // matches ONLY Skript's event (skript-mirror's/reflect's catch-all
-        // event patterns no longer produce spurious ambiguity), so line 2
-        // is now clean and lines 3..=6 carry the four rules.
-        assert_eq!(ds.len(), 4, "{ds:?}");
+        // Lines 0/1 skipped. With the Skript-matched ambiguity suppression
+        // and the all-matches-must-require plugin rule, only the
+        // addon-not-enabled line survives: `broadcast` matches Skript itself
+        // (ambiguity suppressed), `restart server` has a plugin-free match
+        // available (plugin-missing suppressed) and `if player is op:`
+        // matches Skript's condition.
+        assert_eq!(ds.len(), 1, "{ds:?}");
         let line_code: Vec<(usize, &str)> = ds.iter().map(|d| (d.line, d.code)).collect();
-        assert_eq!(
-            line_code,
-            vec![
-                (3, "ambiguous-addon"),   // broadcast: Skript + skript-reflect + Hippo + ...
-                (4, "addon-not-enabled"), // destroy event-train: only traincarts/non-catch-alls match
-                (5, "plugin-missing"),    // restart server: skUtilities requires Spigot
-                (6, "ambiguous-addon"), // if player is op: Skript Is Op + Conquer (catch-alls filtered)
-            ]
-        );
+        assert_eq!(line_code, vec![(4, "addon-not-enabled")]);
         assert!(
-            ds[1].message.contains("skript-traincarts"),
+            ds[0].message.contains("skript-traincarts"),
             "{}",
-            ds[1].message
-        );
-        assert!(
-            ds[2].message.contains("Restart Server"),
-            "{}",
-            ds[2].message
+            ds[0].message
         );
     }
 

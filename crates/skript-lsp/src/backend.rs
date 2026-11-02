@@ -28,7 +28,7 @@
 //! becomes ready, then all open documents are re-validated.
 
 use crate::folding;
-use crate::options::{EffectiveConfig, InitOptions, SkriptRcToml};
+use crate::options::{EffectiveConfig, InitOptions, ParserDiagnostics, SkriptRcToml};
 use crate::state::AppState;
 use serde_json::Value;
 use skript_core::ast::Visitor;
@@ -123,6 +123,13 @@ impl Backend {
         if let Some(mv) = opts.minecraft_version {
             cfg.minecraft_version = Some(mv);
         }
+        if let Some(pd) = opts
+            .parser_diagnostics
+            .as_deref()
+            .and_then(ParserDiagnostics::parse)
+        {
+            cfg.parser_diagnostics = pd;
+        }
         self.state.set_config(cfg);
     }
 
@@ -157,7 +164,12 @@ fn severity_to_lsp(s: Severity) -> DiagnosticSeverity {
 ///
 /// Produces: parse-error, unused-variable, semantic. These are the
 /// language-level checks that don't depend on the pattern engine.
+///
+/// Severity policy for `parse-error` follows the effective config
+/// (default: demoted to Hint — the AST parser is deliberately partial
+/// while the corpus line-checker is the validity authority).
 fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnostic> {
+    let policy = state.config().parser_diagnostics;
     // AST-based validation from cached snapshot
     let diags = state
         .with_snapshot(uri, |snap| {
@@ -167,16 +179,27 @@ fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnost
 
     diags
         .into_iter()
-        .map(|d| Diagnostic {
-            range: Range::new(
-                Position::new(d.line, d.start_col),
-                Position::new(d.line, d.end_col),
-            ),
-            severity: Some(severity_to_lsp(d.severity)),
-            source: Some(d.source),
-            code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code)),
-            message: d.message,
-            ..Default::default()
+        .filter_map(|d| {
+            let severity = if d.code == "parse-error" {
+                match policy {
+                    ParserDiagnostics::Off => return None,
+                    ParserDiagnostics::Hint => DiagnosticSeverity::HINT,
+                    ParserDiagnostics::Error => DiagnosticSeverity::ERROR,
+                }
+            } else {
+                severity_to_lsp(d.severity)
+            };
+            Some(Diagnostic {
+                range: Range::new(
+                    Position::new(d.line, d.start_col),
+                    Position::new(d.line, d.end_col),
+                ),
+                severity: Some(severity),
+                source: Some(d.source),
+                code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code)),
+                message: d.message,
+                ..Default::default()
+            })
         })
         .collect()
 }
@@ -267,6 +290,13 @@ impl LanguageServer for Backend {
                         Ok(rc) => {
                             let mut cfg = self.state.config();
                             cfg.extra_addons = rc.addons;
+                            if let Some(pd) = rc
+                                .parser_diagnostics
+                                .as_deref()
+                                .and_then(ParserDiagnostics::parse)
+                            {
+                                cfg.parser_diagnostics = pd;
+                            }
                             self.state.set_config(cfg);
                             tracing::info!("loaded .skriptrc.toml");
                         }

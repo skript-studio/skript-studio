@@ -5,8 +5,12 @@
 //! types so it is unit-testable on its own.
 //!
 //! Diagnostic rules:
-//!   * Parse errors → Error
-//!   * Semantic errors (unused variables, type mismatches) → Warning
+//!   * Parse errors → Error (the LSP layer may demote them; see
+//!     `parser_diagnostics` in the server options — the AST parser is
+//!     deliberately partial, while the corpus line-checker is the authority
+//!     for "is this valid Skript")
+//!   * Semantic errors (unknown functions, duplicates) → Warning
+//!   * Unused local variables → Hint (lint)
 
 use crate::parser::{parse_program, ParseResult};
 use crate::semantic::{analyze, SemanticAnalysis};
@@ -75,14 +79,16 @@ pub fn validate_analysis(
     }
 
     for err in &analysis.errors {
+        let (line, start_col) = offset_to_linecol(source, err.span.start);
+        let (_, end_col) = offset_to_linecol(source, err.span.end);
         diags.push(Diagnostic {
-            line: 0,
-            start_col: 0,
-            end_col: 0,
+            line,
+            start_col,
+            end_col: end_col.max(start_col + 1),
             severity: Severity::Warning,
             source: "skript".to_owned(),
-            code: "semantic".to_owned(),
-            message: err.clone(),
+            code: err.code.to_owned(),
+            message: err.message.clone(),
         });
     }
 
@@ -93,7 +99,9 @@ pub fn validate_analysis(
             line,
             start_col,
             end_col: end_col.max(start_col + 1),
-            severity: Severity::Warning,
+            // Lint-level: a set-but-never-read local is worth a hint, not a
+            // warning — many showcase scripts legitimately do this.
+            severity: Severity::Hint,
             source: "skript".to_owned(),
             code: "unused-variable".to_owned(),
             message: format!("Unused local variable: {}", decl.name),
@@ -129,13 +137,32 @@ mod tests {
     fn test_validate_program_unused_variable() {
         let source = "function test():\n\tset {_x} to 5";
         let diags = validate_program(source);
-        assert!(
-            diags.iter().any(|d| d.code == "unused-variable"),
-            "expected unused-variable diagnostic, got {diags:?}"
+        let unused: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == "unused-variable")
+            .collect();
+        assert_eq!(unused.len(), 1, "got {diags:?}");
+        assert!(unused[0].message.contains("_x"));
+        // Reported exactly once (no duplicate via the semantic error path).
+        assert_eq!(
+            diags
+                .iter()
+                .filter(|d| d.message.contains("Unused"))
+                .count(),
+            1
         );
+        // At the declaration line (0-based line 1), not line 0.
+        assert_eq!(unused[0].line, 1);
+    }
+
+    #[test]
+    fn test_validate_unused_after_block() {
+        // Skript locals are function-scoped: usage after an if block counts.
+        let source = "function test():\n\tif {p} is set:\n\t\tset {_x} to 5\n\tbroadcast {_x}";
+        let diags = validate_program(source);
         assert!(
-            diags.iter().any(|d| d.message.contains("_x")),
-            "expected message to mention _x, got {diags:?}"
+            diags.iter().filter(|d| d.code == "unused-variable").count() == 0,
+            "expected no unused-variable, got {diags:?}"
         );
     }
 

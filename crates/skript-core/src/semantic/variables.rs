@@ -129,15 +129,18 @@ fn kind_from_name(name: &str) -> VarKind {
 
 /// Builds a [`VariableTracker`] by walking a [`Program`] AST.
 ///
-/// The builder maintains its own lightweight scope hierarchy (separate from
-/// [`ScopeTree`]) so it can associate declarations and usages with their
-/// enclosing scope.
+/// # Scope model
+///
+/// Skript local variables (`{_x}`) are **function-scoped**, not
+/// block-scoped: a local set inside an `if`/`loop` block is visible for the
+/// rest of the enclosing function/event/command. All declarations and
+/// usages within one top-level item therefore share a single scope. (Block
+/// scoping here previously produced false "unused local" diagnostics for
+/// the very common `if …: set {_w} …` / later `send "%{_w}%"` pattern.)
 pub struct VariableTrackerBuilder {
     pub tracker: VariableTracker,
-    /// Stack of scope IDs — current scope is at the top.
-    scope_stack: Vec<usize>,
-    /// Parent of each scope ID (None for root).
-    scope_parents: Vec<Option<usize>>,
+    /// Scope ID of the top-level item currently being walked.
+    item_scope: usize,
     next_scope_id: usize,
 }
 
@@ -145,8 +148,7 @@ impl VariableTrackerBuilder {
     pub fn new() -> Self {
         VariableTrackerBuilder {
             tracker: VariableTracker::new(),
-            scope_stack: vec![0],
-            scope_parents: vec![None],
+            item_scope: 0,
             next_scope_id: 1,
         }
     }
@@ -158,34 +160,9 @@ impl VariableTrackerBuilder {
         self.tracker
     }
 
-    fn current_scope(&self) -> usize {
-        *self.scope_stack.last().unwrap()
-    }
-
-    fn push_scope(&mut self) -> usize {
-        let parent = self.current_scope();
-        let id = self.next_scope_id;
+    fn enter_item(&mut self) {
+        self.item_scope = self.next_scope_id;
         self.next_scope_id += 1;
-        self.scope_parents.push(Some(parent));
-        self.scope_stack.push(id);
-        id
-    }
-
-    fn pop_scope(&mut self) {
-        self.scope_stack.pop();
-    }
-
-    fn is_ancestor_or_equal(&self, ancestor: usize, descendant: usize) -> bool {
-        let mut id = descendant;
-        loop {
-            if id == ancestor {
-                return true;
-            }
-            match self.scope_parents[id] {
-                Some(parent) => id = parent,
-                None => return false,
-            }
-        }
     }
 
     fn record_declaration(&mut self, name: &str, span: Span) {
@@ -194,7 +171,7 @@ impl VariableTrackerBuilder {
             name: name.to_string(),
             kind,
             declared_at: span,
-            scope_idx: self.current_scope(),
+            scope_idx: self.item_scope,
             usages: Vec::new(),
         });
     }
@@ -204,7 +181,7 @@ impl VariableTrackerBuilder {
             name: name.to_string(),
             kind: VarKind::Parameter,
             declared_at: span,
-            scope_idx: self.current_scope(),
+            scope_idx: self.item_scope,
             usages: Vec::new(),
         });
     }
@@ -214,24 +191,24 @@ impl VariableTrackerBuilder {
             name: name.to_string(),
             kind: VarKind::LoopVar,
             declared_at: span,
-            scope_idx: self.current_scope(),
+            scope_idx: self.item_scope,
             usages: Vec::new(),
         });
     }
 
     fn record_usage(&mut self, name: &str, span: Span) {
         let idx = self.tracker.usages.len();
-        let current = self.current_scope();
+        let current = self.item_scope;
         self.tracker.usages.push(VariableUsage {
             name: name.to_string(),
             used_at: span,
             scope_idx: current,
         });
-        // Find the latest matching declaration visible from this scope
+        // Find the latest matching declaration in the same item scope
         // using indices to avoid mutable+immutable borrow conflict.
         let decl_idx = (0..self.tracker.declarations.len()).rev().find(|&i| {
             let d = &self.tracker.declarations[i];
-            d.name == name && self.is_ancestor_or_equal(d.scope_idx, current)
+            d.name == name && d.scope_idx == current
         });
         if let Some(di) = decl_idx {
             self.tracker.declarations[di].usages.push(idx);
@@ -240,27 +217,14 @@ impl VariableTrackerBuilder {
 
     fn detect_errors(&mut self) {
         for decl in &self.tracker.declarations {
-            // Unused local variable warning
+            // Unused local variable warning. (Out-of-scope usage cannot
+            // occur: locals are item-scoped by construction — see the scope
+            // model note on the builder.)
             if decl.kind == VarKind::Local && decl.usages.is_empty() {
                 self.tracker.errors.push(VariableError {
                     message: format!("Unused local variable '{}'", decl.name),
                     span: decl.declared_at,
                 });
-            }
-            // Local variable referenced outside its declaring scope
-            if decl.kind == VarKind::Local {
-                for &usage_idx in &decl.usages {
-                    let usage = &self.tracker.usages[usage_idx];
-                    if !self.is_ancestor_or_equal(decl.scope_idx, usage.scope_idx) {
-                        self.tracker.errors.push(VariableError {
-                            message: format!(
-                                "Local variable '{}' used outside its declaring scope",
-                                decl.name
-                            ),
-                            span: usage.used_at,
-                        });
-                    }
-                }
             }
         }
     }
@@ -282,45 +246,40 @@ impl Visitor for VariableTrackerBuilder {
     fn visit_top_level_item(&mut self, item: &TopLevelItem) {
         match item {
             TopLevelItem::Function(f) => {
-                self.push_scope();
+                self.enter_item();
                 for param in &f.parameters {
                     self.record_param(&param.name, param.span);
                 }
                 for stmt in &f.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             TopLevelItem::Command(cmd) => {
-                self.push_scope();
+                self.enter_item();
                 for arg in &cmd.arguments {
                     self.record_param(&arg.name, arg.span);
                 }
                 for stmt in &cmd.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             TopLevelItem::Event(evt) => {
-                self.push_scope();
+                self.enter_item();
                 for stmt in &evt.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             TopLevelItem::PeriodicEvent(evt) => {
-                self.push_scope();
+                self.enter_item();
                 for stmt in &evt.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             TopLevelItem::Example(example) => {
-                self.push_scope();
+                self.enter_item();
                 for stmt in &example.content {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             _ => walk_top_level_item(self, item),
         }
@@ -330,62 +289,44 @@ impl Visitor for VariableTrackerBuilder {
         match stmt {
             Statement::If(s) => {
                 self.visit_expression(&s.condition);
-
-                self.push_scope();
                 for stmt in &s.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
-
                 for elif in &s.else_if {
                     self.visit_expression(&elif.condition);
-                    self.push_scope();
                     for stmt in &elif.body {
                         self.visit_statement(stmt);
                     }
-                    self.pop_scope();
                 }
-
                 if let Some(ref el) = s.else_branch {
-                    self.push_scope();
                     for stmt in &el.body {
                         self.visit_statement(stmt);
                     }
-                    self.pop_scope();
                 }
             }
             Statement::While(s) => {
                 self.visit_expression(&s.condition);
-                self.push_scope();
                 for stmt in &s.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             Statement::DoWhile(s) => {
-                self.push_scope();
                 for stmt in &s.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
                 self.visit_expression(&s.condition);
             }
             Statement::ForIn(s) => {
                 self.visit_expression(&s.iterable);
-
-                self.push_scope();
                 self.record_loop_var(&s.variable, s.span);
                 for stmt in &s.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             Statement::Loop(s) => {
-                self.push_scope();
                 for stmt in &s.body {
                     self.visit_statement(stmt);
                 }
-                self.pop_scope();
             }
             Statement::Assignment(s) => {
                 if let AssignmentTarget::Variable(v) = &s.target {

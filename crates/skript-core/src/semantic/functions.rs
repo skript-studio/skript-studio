@@ -30,6 +30,81 @@ pub struct FunctionError {
     pub span: Span,
 }
 
+/// Skript's built-in functions (case-insensitive names). Calls to these are
+/// always valid regardless of user declarations — sourced from the Skript
+/// docs "Functions" page (math, utility, location/vector constructors, ...).
+pub const BUILTIN_FUNCTIONS: &[&str] = &[
+    // math
+    "abs",
+    "ceiling",
+    "floor",
+    "round",
+    "mod",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "exp",
+    "ln",
+    "log",
+    "random",
+    "calculate",
+    "max",
+    "min",
+    // location / vector / world
+    "location",
+    "location from",
+    "vector",
+    "vector from xyz",
+    "world",
+    "biome",
+    // text
+    "join",
+    "split",
+    "escaped",
+    "lowercase",
+    "uppercase",
+    "pretty",
+    "length",
+    "substring",
+    "replace",
+    "last replace",
+    "first index",
+    "last index",
+    "contains",
+    "starts with",
+    "ends with",
+    "format",
+    "capitalize",
+    // misc
+    "date",
+    "now",
+    "uuid",
+    "type of",
+    "clone",
+    "parse",
+    "is set",
+    "name",
+    "colored",
+    "uncolored",
+    "raw",
+    "reverse",
+    "shuffle",
+    "sort",
+    "numbers between",
+];
+
+/// Case-insensitive builtin lookup.
+fn is_builtin_function(name: &str) -> bool {
+    BUILTIN_FUNCTIONS
+        .iter()
+        .any(|b| b.eq_ignore_ascii_case(name))
+}
+
 /// Registry of all function declarations and calls in a program.
 #[derive(Debug, Clone)]
 pub struct FunctionRegistry {
@@ -81,7 +156,9 @@ impl FunctionRegistry {
 
     /// Validate all calls against their declarations.
     ///
-    /// Returns a list of errors for calls with wrong argument counts.
+    /// Returns a list of errors for calls to unknown functions (neither
+    /// declared in this document nor a Skript builtin) and for declared
+    /// functions called with a wrong argument count.
     pub fn validate_calls(&self) -> Vec<FunctionError> {
         let mut errors = Vec::new();
         for call in &self.calls {
@@ -95,9 +172,12 @@ impl FunctionRegistry {
                         span: call.call_span,
                     });
                 }
-            } else {
+            } else if !is_builtin_function(&call.name) {
                 errors.push(FunctionError {
-                    message: format!("Call to undeclared function '{}'", call.name),
+                    message: format!(
+                        "Call to undeclared function '{}' (not a Skript builtin either)",
+                        call.name
+                    ),
                     span: call.call_span,
                 });
             }

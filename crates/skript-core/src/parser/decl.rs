@@ -346,7 +346,7 @@ pub fn parse_command(parser: &mut Parser) -> CommandDecl {
                 break;
             }
 
-            let key = parse_identifier_or_keyword(parser, "Expected metadata key");
+            let key = parse_metadata_key(parser);
 
             parser.expect(&Token::Colon);
             let value_tokens = collect_line_tokens(parser);
@@ -373,6 +373,34 @@ pub fn parse_command(parser: &mut Parser) -> CommandDecl {
         body,
         span: Span::new(start.start, parser.peek().span.start),
     }
+}
+
+/// Parse a command metadata key: one or more identifier-like tokens joined
+/// with spaces, up to (not including) the `:` — Skript has multi-word keys
+/// like `executable by:`, `permission message:` and `cooldown bypass:`.
+fn parse_metadata_key(parser: &mut Parser) -> String {
+    let first = parse_identifier_or_keyword(parser, "Expected metadata key");
+    if first.is_empty() {
+        return first;
+    }
+    let mut key = first;
+    // Greedily consume further identifier-like tokens until the Colon.
+    loop {
+        match parser.peek_token() {
+            Token::Identifier(s) => {
+                key.push(' ');
+                key.push_str(s.as_str());
+                parser.advance();
+            }
+            Token::Keyword(k) => {
+                key.push(' ');
+                key.push_str(k);
+                parser.advance();
+            }
+            _ => break,
+        }
+    }
+    key
 }
 
 fn set_metadata_field(metadata: &mut CommandMetadata, key: &str, value: &str) {

@@ -70,12 +70,42 @@ impl Default for LogLevelArg {
     }
 }
 
+/// How the LSP surfaces the AST parser's errors.
+///
+/// The recursive-descent parser is deliberately partial (it powers AST
+/// features like folding/symbols/completion); the corpus line-checker is
+/// the authority for "is this valid Skript". Genuinely broken lines are
+/// reported `unparseable` by the checker, so parser errors are demoted to
+/// hints by default to avoid a wall of false red squiggles on modern
+/// constructs the AST parser does not model yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParserDiagnostics {
+    Error,
+    #[default]
+    Hint,
+    Off,
+}
+
+impl ParserDiagnostics {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "error" => Some(ParserDiagnostics::Error),
+            "hint" => Some(ParserDiagnostics::Hint),
+            "off" | "none" | "false" => Some(ParserDiagnostics::Off),
+            _ => None,
+        }
+    }
+}
+
 /// Schema for `.skriptrc.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct SkriptRcToml {
     /// Addon names the project uses, in addition to core Skript.
     pub addons: Vec<String>,
+    /// How to surface AST parser errors: "error", "hint" (default) or
+    /// "off".
+    pub parser_diagnostics: Option<String>,
 }
 
 /// `initializationOptions` sent by the client. Every field is optional.
@@ -99,6 +129,9 @@ pub struct InitOptions {
     /// Minecraft version the target server runs (e.g. "1.20.4").
     /// Currently informational; reserved for future version-gated syntax.
     pub minecraft_version: Option<String>,
+    /// How to surface AST parser errors: "error", "hint" (default) or
+    /// "off".
+    pub parser_diagnostics: Option<String>,
 }
 
 /// Effective runtime configuration after merging CLI + init + defaults.
@@ -120,6 +153,8 @@ pub struct EffectiveConfig {
     pub skript_version: Option<String>,
     /// Minecraft version the target server runs (e.g. "1.20.4").
     pub minecraft_version: Option<String>,
+    /// Severity policy for AST parser errors (default: hint).
+    pub parser_diagnostics: ParserDiagnostics,
 }
 
 impl Default for EffectiveConfig {
@@ -131,6 +166,7 @@ impl Default for EffectiveConfig {
             installed_plugins: Vec::new(),
             skript_version: None,
             minecraft_version: None,
+            parser_diagnostics: ParserDiagnostics::default(),
         }
     }
 }
@@ -204,5 +240,29 @@ mod tests {
         assert_eq!(opts.enabled_addons, None);
         assert_eq!(opts.installed_plugins, None);
         assert_eq!(opts.max_completions, None);
+    }
+
+    #[test]
+    fn parser_diagnostics_parse() {
+        assert_eq!(
+            ParserDiagnostics::parse("error"),
+            Some(ParserDiagnostics::Error)
+        );
+        assert_eq!(
+            ParserDiagnostics::parse("HINT"),
+            Some(ParserDiagnostics::Hint)
+        );
+        assert_eq!(
+            ParserDiagnostics::parse("off"),
+            Some(ParserDiagnostics::Off)
+        );
+        assert_eq!(ParserDiagnostics::default(), ParserDiagnostics::Hint);
+        assert_eq!(ParserDiagnostics::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn skript_rc_parser_diagnostics() {
+        let rc: SkriptRcToml = toml::from_str(r#"parser_diagnostics = "error""#).unwrap();
+        assert_eq!(rc.parser_diagnostics.as_deref(), Some("error"));
     }
 }

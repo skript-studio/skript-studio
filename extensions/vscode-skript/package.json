@@ -2,7 +2,7 @@
   "name": "skript-lsp",
   "displayName": "Skript LSP",
   "description": "Language support for Skript (Minecraft scripting) via skript-lsp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "skript-studio",
   "license": "MIT",
   "repository": {
@@ -71,6 +71,21 @@
           "type": "number",
           "default": 100,
           "description": "Maximum number of completion items returned per request."
+        },
+        "skript-lsp.parserDiagnostics": {
+          "type": "string",
+          "default": "hint",
+          "enum": [
+            "error",
+            "hint",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Show the (deliberately partial) AST parser's errors as red errors",
+            "Show them as dimmed hints (default — the corpus line-checker is the validity authority)",
+            "Hide parser errors entirely"
+          ],
+          "description": "How AST parser errors are surfaced. The parser is partial by design; use 'error' only if you want maximum strictness."
         }
       }
     }

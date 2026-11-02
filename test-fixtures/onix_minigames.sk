@@ -1,0 +1,497 @@
+function mg_loadVariables():
+	delete {prefix::*}
+	delete {perm::*}
+	delete {minigames::*}
+
+	set {prefix::main} to "<#7A8BFA><b>Onix<#204352><b>MG <#555555>|<reset>"
+	set {prefix::debug} to "<#aa0000><b>DEBUG <#555555>|<reset>"
+
+	set {perm::player} to "onix.player"
+	set {perm::admin} to "onix.admin"
+	set {perm::debug} to "onix.debug"
+
+	set {minigames::system::enabled} to true
+	set {minigames::system::state} to "Lobby"
+	set {minigames::system::timer} to 0
+	set {minigames::system::active_game} to ""
+
+	set {minigames::config::death_y_level} to -48
+	set {minigames::config::lobby_timer} to 30
+	set {minigames::config::game_timer} to 120
+	set {minigames::config::broadcast_timers::*} to 30, 20 and 10
+
+	set {minigames::tntrun::blocks::*} to "green concrete", "yellow concrete", "red concrete" and "gray concrete"
+
+	add "Spleef" and "TNT Run" and "Sumo" and "Hot Potato" to {minigames::list::*}
+
+function mg_notify(p: player, msg: text):
+	send "%{prefix::main}% %{_msg}%" to {_p}
+	play sound "block.anvil.land" with volume 10 with pitch 1 to {_p}
+
+function mg_broadcast(msg: text):
+	broadcast "%{prefix::main}% %{_msg}%"
+
+function mg_teleport_to_arena(p: player, game: text):
+	if {_game} is "Spleef":
+		teleport {_p} to location(1.5, -20, 35.5, world "world", 90, 0)
+	else if {_game} is "TNT Run":
+		teleport {_p} to location(-23.5, -20, 38.5, world "world", 90, 0)
+	else if {_game} is "Hot Potato":
+		teleport {_p} to location(1.5, -20, 35.5, world "world", 90, 0)
+	else if {_game} is "Sumo":
+		teleport {_p} to location(4.5, -15, 33.5, world "world", 90, 0)
+
+function mg_item_cmd(cmd: text, item: text, amount: number, p: player):
+	execute console command "/si %{_cmd}% %{_item}% %{_amount}% %{_p}% true"
+
+function mg_is_game_active(game: text) :: boolean:
+	if {minigames::system::active_game} is {_game}:
+		return true
+	else:
+		return false
+
+function mg_respawn_all():
+	loop all players:
+		spawn(loop-player)
+		execute console command "/si take spleef_shovel 64 %loop-player% true" if {minigames::system::active_game} is "Spleef"
+
+function mg_broadcast_winner(w: text):
+	if {minigames::players::*} is not set:
+		set {_w} to "&8[&7Nobody&8]"
+	else if {_w} is not set:
+		set {_w} to first element of {minigames::players::*}
+	else:
+		set {_w} to a random element of {minigames::players::*}
+	send "&a%{_w}% &eis The Winner" to all players
+	send title "&e&lWINNER!" with subtitle "&a%{_w}% &ewon the game!" to all players for 5 seconds
+	play sound "ui.toast.challenge_complete" with volume 1 with pitch 1 to all players
+
+function sendDebug(message: text):
+	send "%{prefix::debug}% %{_message}%" to all players where [player input has permission {perm::debug}]
+
+on load:
+	mg_loadVariables()
+	sendDebug("Initializing Onix Minigames..")
+	mg_start_cycle()
+
+on quit:
+	{minigames::system::state} is "Ingame"
+	mg_eliminate({_p})
+	if {minigames::system::active_game} is "Hot Potato":
+		if {minigames::hotpotato::holder} is uuid of player:
+			broadcast "&cThe potato holder left! Giving potato to a random player"
+
+on join:
+	wait 1 tick
+	spawn(player)
+
+on respawn:
+	wait 1 tick
+	spawn(player)
+
+function mg_eliminate(p: offlineplayer):
+	{minigames::players::*} contains {_p}
+	{minigames::system::state} is "Ingame"
+
+	remove {_p} from {minigames::players::*}
+	mg_broadcast("&e%{_p}% &cwas eliminated from the game!")
+	send "&7Blocks Broken: &e%{minigames::tntrun::blocksbroken::%uuid of {_p}%}%" to {_p} if {minigames::system::active_game} is "TNT Run"
+	spawn({_p})
+	wait 1 tick
+	play sound "block.lava.extinguish" with volume 1 with pitch 1 to all players
+	if size of {minigames::players::*} is 1:
+		mg_end_game()
+	if size of {minigames::players::*} is 0:
+		mg_end_game()
+	delete {minigames::tntrun::blocksbroken::%uuid of {_p}%}
+
+function mg_broadcast_vote():
+	stop if {minigames::system::state} is not "Lobby"
+	send "" to all players
+	send "&6&lVOTE FOR THE NEXT MINIGAME!" to all players
+
+	loop {minigames::list::*}:
+		set {_game} to loop-value
+		set {_v} to {minigames::votes::%{_game}%}
+		if {_v} is not set:
+			set {_v} to 0
+		send component mini message from "<b><green><click:run_command:'/vote %{_game}%'><hover:show_text:'<gray>Click to vote for <yellow>%{_game}%'>[VOTE]</hover></click></green></b> <white>%{_game}%</white> <gray>(%{_v}% votes)" to all players
+	send "&7Use &e/vote &7or click &a&l[VOTE]" to all players
+	send "" to all players
+
+function mg_end_game():
+	{minigames::system::state} is "Ingame"
+	set {minigames::system::timer} to 10
+	set {minigames::system::state} to "Result"
+
+	mg_broadcast_winner("winner")
+	wait 3 seconds
+
+	loop all players:
+		mg_item_cmd("take", "hotpotato", 1, loop-player)
+
+	send "&7Returning to lobby..." to all players
+	mg_change_state("lobby")
+	wait 7 seconds
+
+	mg_respawn_all()
+	stop if {minigames::system::enabled} is not set
+	mg_broadcast("&c&lThe game has ended!")
+	broadcast ""
+	wait 3 seconds
+	mg_start_cycle()
+
+function mg_start_game(game: text):
+	stop if {minigames::system::state} is not "Lobby"
+	while size of all players is 0:
+		{minigames::system::state} is "Lobby"
+		wait 5 seconds
+	set {minigames::system::state} to "Ingame"
+	set {minigames::system::active_game} to {_game}
+	set {minigames::system::timer} to {minigames::config::game_timer}
+
+
+	play sound "entity.player.levelup" with volume 1 with pitch 1 to all players
+	send subtitle "&7Loading..." to all players
+	loop all players:
+		add loop-player to {minigames::players::*}
+		spawn(loop-player)
+		set gamemode of loop-value to adventure
+
+	if {_game} is "Spleef":
+		mg_change_state("spleef")
+		wait 3 seconds
+		broadcast "&e&lSpleef &8- &fDig your way to victory!"
+		loop {minigames::players::*}:
+			mg_item_cmd("give", "spleef_shovel", 1, loop-value)
+			mg_teleport_to_arena(loop-value, {_game})
+	else if {_game} is "TNT Run":
+		mg_change_state("tntrun")
+		wait 3 seconds
+		broadcast "&c&lTNT Run &8- &fDon't look down!"
+		loop {minigames::players::*}:
+			mg_teleport_to_arena(loop-value, {_game})
+	else if {_game} is "Hot Potato":
+		mg_change_state("hotpotato")
+		wait 3 seconds
+		broadcast "&6&lHot Potato &8- &fTag your opponents!"
+		loop {minigames::players::*}:
+			mg_teleport_to_arena(loop-value, {_game})
+		mg_hot_potato_cycle()
+	else if {_game} is "Sumo":
+		mg_change_state("sumo")
+		wait 3 seconds
+		broadcast "&4&lSumo &8- &fPunch off opponents out of the arena!"
+		loop {minigames::players::*}:
+			mg_teleport_to_arena(loop-value, {_game})
+	else:
+		mg_broadcast("&c&lERROR! &6The system has caught an fatal error.")
+		delete {minigames::*}
+		mg_start_cycle()
+
+
+	while {minigames::system::timer} > 0:
+		{minigames::system::timer} is set
+		stop if {minigames::system::state} is not "Ingame"
+		send action bar "&eActive: &a%{minigames::system::active_game}% &8&l| &eRemaining: &f%{minigames::system::timer}%s" to all players
+		remove 1 from {minigames::system::timer}
+		wait 1 second
+
+	mg_end_game()
+
+function mg_finalize_vote():
+	stop if {minigames::system::state} is not "Lobby"
+
+	set {_top} to -1
+	delete {_gameVoteWinner}
+
+	loop {minigames::list::*}:
+		set {_game} to loop-value
+		if {minigames::votes::%{_game}%} > {_top}:
+			set {_top} to {minigames::votes::%{_game}%}
+			set {_gameVoteWinner} to {_game}
+
+	if {_gameVoteWinner} is not set:
+		set {_gameVoteWinner} to random element of {minigames::list::*}
+		mg_broadcast("&eNo votes cast! Randomly picking &a&l%{_gameVoteWinner}%")
+	else:
+		mg_broadcast("&eSelected Game: &a&l%{_gameVoteWinner}%")
+
+	wait 2 seconds
+	mg_start_game({_gameVoteWinner})
+
+function mg_start_cycle():
+	mg_change_state("lobby")
+	set {minigames::system::state} to "Loading"
+	while size of all players is 0:
+		{minigames::system::state} is "Loading"
+		wait 5 seconds
+	sendDebug("Starting new cycle...")
+
+	wait 10 ticks
+	mg_loadVariables()
+	wait 10 ticks
+
+	set {minigames::system::state} to "Lobby"
+	set {minigames::system::timer} to {minigames::config::lobby_timer}
+
+
+	while {minigames::system::timer} > 0:
+		stop if {minigames::system::state} is not set
+		if {minigames::config::broadcast_timers::*} contains {minigames::system::timer}:
+			mg_broadcast_vote()
+		if size of {minigames::voted::*} is size of all players:
+			{minigames::system::timer} > 10
+			mg_broadcast("<yellow>Everyone voted, speeding up timer..")
+			play sound "block.anvil.step" with volume 10 with pitch 1 to all players
+			set {minigames::system::timer} to 10
+		loop all players:
+			if {minigames::system::timer} > 5:
+				send action bar "&bVoting Phase &8| &eNext game in: &f%{minigames::system::timer}%s" to loop-player
+			else:
+				send action bar "&6&lSTARTING IN &f&l%{minigames::system::timer}%s" to loop-player
+				play sound "block.note_block.bit" with volume 1 with pitch 1 to loop-player
+		remove 1 from {minigames::system::timer}
+		wait 1 second
+
+	mg_finalize_vote()
+
+function spawn(p: player):
+	teleport {_p} to location(-46.5, -18.0, 38.5, world "world", -90, 0)
+
+on skbee tab complete for "/center":
+	if player has permission {perm::admin}:
+		set {_yaws::*} to "0", "90", "180" and "-90"
+		set {_pitches::*} to "0", "90" and "-90"
+		if tab arg-2 is not set:
+			add {_yaws::*} to tab completions
+		if tab arg-2 is set:
+			add {_pitches::*} to tab completions
+
+command /center [<number>] [<number>]:
+	description: Teleport to the center of the block you're standing on
+	usage: /center [yaw] [pitch]
+	permission: onix.admin
+	permission message: &cYou do not have permission to center yourself.
+	trigger:
+		teleport player to location of block at player's location
+		if arg-1 is set:
+			set player's yaw to arg-1
+		if arg-2 is set:
+			set player's pitch to arg-2
+		send "&eYou have been centered!" to player
+		play sound "entity.enderman.teleport" with volume 0.5 and pitch 2 to player
+
+command /spawn [<player>]:
+	description: Teleport yourself or others to spawn
+	usage: /spawn [player]
+	permission: onix.spawn
+	permission message: &cYou do not have permission to use the spawn command.
+	cooldown: 3 seconds
+	cooldown message: &cPlease wait %remaining time% before using /spawn again.
+	trigger:
+		if arg-1 is set:
+			if player has permission "onix.admin":
+				spawn(arg-1)
+				send "&7You have teleported &f%arg-1% &7to spawn." to player
+			else:
+				send "&cOnly administrators can teleport other players." to player
+		else:
+			spawn(player)
+
+options:
+	discordmsg: "<green>Join our discord server! <click:open_url:'https://discord.gg/RyKjZ2pdw2'><hover:show_text:'<yellow>Click ME!'><u><blue>discord.gg/RyKjZ2pdw2</blue></u></hover></click>"
+
+command /discord:
+	description: Join the official discord server
+	aliases: /dc, /dcserver, /discordserver, /onixdiscord
+	trigger:
+		send component mini message from {@discordmsg} to player
+		play sound "entity.experience_orb.pickup" with volume 0.5 and pitch 1 to player
+
+every 2 minutes:
+	send component mini message from {@discordmsg} to all players
+	play sound "block.note_block.bit" with volume 0.3 and pitch 1.5 to all players
+
+command /vote <text>:
+	description: Vote for the next minigame
+	usage: /vote <game>
+	executable by: player
+	trigger:
+		if {minigames::system::state} is not "Lobby":
+			mg_notify(player, "&cNo voting in progress!")
+			stop
+		if {minigames::voted::*} contains uuid of player:
+			mg_notify(player, "&cYou already voted!")
+			stop
+		if {minigames::list::*} does not contain arg-1:
+			mg_notify(player, "&cInvalid game!")
+			stop
+
+		add uuid of player to {minigames::voted::*}
+		add 1 to {minigames::votes::%arg-1%}
+		mg_broadcast_vote()
+		send "%{prefix::main}% &aYou voted for &f%arg-1%&a!" to player
+		sendDebug("&7%player% voted for %arg-1%")
+		play sound "block.note_block.pling" with volume 1 with pitch 2 to player
+
+
+on tab complete of "/vote":
+	{minigames::system::state} is "Lobby"
+	set tab completions to {minigames::list::*}
+on tab complete of "/changemapstate":
+	set tab completions to {minigames::list::*} in lowercase
+
+command /startgame:
+	description: Skip the lobby timer and start the game immediately
+	usage: /startgame
+	permission: onix.admin
+	cooldown: 2 seconds
+	trigger:
+		if {minigames::system::state} is "Lobby":
+			play sound "block.note_block.bass" with volume 10 with pitch 1 to all players
+			send "%{prefix::main}% &e%player% &7skipped waiting time." to all players
+			set {minigames::system::timer} to 5
+		else:
+			mg_notify(player, "&7Server is in &e%{minigames::system::state}%&7 state.")
+
+command /stopgame:
+	description: Stop the current minigame and return to lobby
+	usage: /stopgame
+	permission: onix.admin
+	cooldown: 2 seconds
+	trigger:
+		if {minigames::system::state} is not set:
+			send "%{prefix::main}% &cSystem is already disabled!" to player
+			stop
+		send action bar "" to all players
+		set {minigames::system::state} to "Disabled"
+		send "%{prefix::main}% &7System shutdown!" to player
+		play sound "block.note_block.bass" with volume 10 with pitch 1 to all players
+		mg_change_state("lobby")
+		mg_respawn_all()
+		delete {minigames::*}
+
+command /settimer <number>:
+	description: Set the game timer to a specific value
+	usage: /settimer <seconds>
+	permission: onix.admin
+	executable by: player
+	trigger:
+		set {minigames::system::timer} to arg-1
+		sendDebug("Admin %player% set timer to %arg-1% seconds")
+
+function mg_change_state(state: text):
+	set {_pasteLoc} to location at -47, -20, 38 in world "world"
+	paste schematic "OnixMG_state_%{_state}%.schem" at {_pasteLoc}
+
+command /changemapstate [<text>]:
+	description: Opens the interface to modify the current map state
+	usage: /changemapstate [state]
+	permission: onix.admin
+	permission message: <light red>Access denied.
+	trigger:
+		if arg-1 is set:
+			mg_change_state(arg-1)
+			stop
+		set {_gui} to chest inventory with 5 rows named "&e&lSelect Map State"
+		set {_none} to a barrier named "&c&lTo be added.." with lore "&eNew minigames will be added here"
+		set slot (integers between 0 and 44) of {_gui} to {statechangeritem::emptyslot}
+
+		set slot 10 of {_gui} to {statechangeritem::lobby}
+		set slot 12 of {_gui} to {statechangeritem::spleef}
+		set slot 14 of {_gui} to {statechangeritem::tntrun}
+		set slot 16 of {_gui} to {statechangeritem::sumo}
+		set slot 28 of {_gui} to {statechangeritem::hotpotato}
+		set slot 30 of {_gui} to {_none}
+		set slot 32 of {_gui} to {_none}
+		set slot 34 of {_gui} to {_none}
+
+		open {_gui} to player
+		play sound "ui.button.click" with volume 0.5 and pitch 1.2 to player
+
+on inventory click:
+	name of event-inventory is "&e&lSelect Map State"
+	cancel event
+	event-inventory is not player's inventory
+	if clicked slot is 10:
+		mg_change_state("lobby")
+	else if clicked slot is 12:
+		mg_change_state("spleef")
+	else if clicked slot is 14:
+		mg_change_state("tntrun")
+	else if clicked slot is 16:
+		mg_change_state("sumo")
+	else if clicked slot is 28:
+		mg_change_state("hotpotato")
+	wait 1 tick
+	spawn(player)
+
+command /eliminate <player>:
+	description: Eliminate a player from the current game
+	usage: /eliminate <player>
+	permission: onix.admin
+	trigger:
+		mg_eliminate(arg-1)
+
+command /testitemsave:
+	description: Save the held item as a state changer item
+	usage: /testitemsave
+	permission: op
+	trigger:
+		send "&aHold none"
+		wait 2 seconds
+		set {statechangeritem::emptyslot} to player's tool
+		send "Done"
+
+command /test:
+	description: Test command - spawn falling TNT
+	usage: /test
+	permission: op
+	trigger:
+		skbee spawn falling tnt above target block of player
+
+on player move:
+	if y-coordinate of location of player < {minigames::config::death_y_level}:
+		if {minigames::system::active_game} is "Spleef":
+			mg_item_cmd("take", "spleef_shovel", 999, player)
+			mg_eliminate(player)
+		else if {minigames::system::active_game} is "TNT Run":
+			mg_eliminate(player)
+		else if {minigames::system::active_game} is "Sumo":
+			mg_eliminate(player)
+
+	if {minigames::system::active_game} is "TNT Run":
+		event-block is {minigames::tntrun::blocks::*}
+		wait 5 tick
+		set event-block to air
+		add 1 to {minigames::tntrun::blocksbroken::%uuid of player%}
+
+function mg_hot_potato_cycle():
+	{minigames::system::active_game} is "Hot Potato"
+	set {minigames::system::timer} to 30
+	set {_p} to random element out of {minigames::players::*}
+	set {minigames::hotpotato::holder} to uuid of {_p}
+
+	mg_item_cmd("give", "hotpotato", 1, {_p})
+	broadcast "&e%name of {_p}% &7has the potato!"
+
+	while {minigames::system::timer} > 0:
+		{minigames::system::active_game} is "Hot Potato"
+		wait 1 second
+		remove 1 from {minigames::system::timer}
+		if {minigames::system::timer} is 0:
+			broadcast "&c&lBOOM! &e%name of {_p}% &7exploded!"
+			mg_eliminate({_p})
+			stop loop
+
+on damage:
+	{minigames::system::active_game} is "Hot Potato"
+	cancel event if {minigames::hotpotato::holder} is uuid of attacker
+
+	mg_item_cmd("give", "hotpotato", 1, attacker)
+	mg_item_cmd("take", "hotpotato", 1, attacker)
+
+	set {minigames::hotpotato::holder} to uuid of victim
+	broadcast "&e%attacker% &apassed the potato to &e%victim%"
+	play sound "entity.ender_dragon.flap" to all players
