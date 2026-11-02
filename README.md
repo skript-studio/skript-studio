@@ -124,12 +124,22 @@ Package manager: **Bun**.
 cd extensions/vscode-skript
 bun install                              # install JS deps
 bun run compile                          # JS output → out/
-bun run build:binary                     # release exe → bin/  (cargo build --release -p skript-lsp)
+bun run build:binary                     # release binary → bin/ (native cargo build for the current platform)
 bun run package                          # vsce package → skript-lsp.vsix
 bun run install-ext                        # code --install-extension skript-lsp.vsix
 bun run dev:install                      # all of the above: build → package → install
 bun run download-cache                   # refresh SkriptHub corpus → ../../crates/skript-registry/testdata/skripthub.json
 ```
+
+The extension ships LSP binaries **inside the vsix**:
+`bin/skript-lsp-windows-x64.exe` (win32-x64) and `bin/skript-lsp-linux-x64`
+(linux-x64, static musl — runs on any x86_64 Linux regardless of the host
+glibc). `bun run build:binary` rebuilds the binary for your current platform
+into the matching slot, so a native MSVC build on Windows simply replaces the
+committed cross-built exe. On other platforms the extension falls back to a
+`skript-lsp` on `PATH` (or `skript-lsp.serverPath`). Both slots can be
+cross-built from an x86_64 Linux host with
+[`scripts/cross-build-binaries.sh`](scripts/cross-build-binaries.sh).
 
 All SkriptHub corpus data is **committed to the repo** — a fresh clone
 builds and tests with zero setup:
@@ -219,8 +229,10 @@ CI (`.github/workflows/ci.yml`, Linux only) runs two jobs:
   `cargo check --workspace --all-targets`, and
   `cargo test --workspace --all-targets`.
 - **VSCode extension** — `bun install --frozen-lockfile`, `bun run
-typecheck`, `bun run compile`, `bun run package` (vsce under the bun
-runtime), then uploads `skript-lsp.vsix` as a workflow artifact.
+  typecheck`, `bun run compile`, a guard that both bundled binaries
+  (`bin/skript-lsp-linux-x64`, `bin/skript-lsp-windows-x64.exe`) are present,
+  `bun run package` (vsce under the bun runtime), then uploads
+  `skript-lsp.vsix` as a workflow artifact.
 
 ## SkriptHub corpus
 

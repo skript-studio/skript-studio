@@ -62,7 +62,7 @@ Package manager: **Bun** (`bun install`, `bun run`, `bunx`).
 cd extensions/vscode-skript
 bun install                              # install JS deps (vscode-languageclient, typescript, ...)
 bun run compile                          # JS output → out/
-bun run build:binary                     # release exe → bin/
+bun run build:binary                     # release binary → bin/ (per-platform slot, native build)
 bun run package                          # vsce package → skript-lsp.vsix
 bun run install-ext                        # code --install-extension skript-lsp.vsix
 bun run dev:install                      # all of the above: build → package → install
@@ -71,7 +71,10 @@ bun run download-cache                   # refresh SkriptHub corpus → ../../cr
 ```
 
 `extension.ts` starts the LSP with `--stdio --log-level`. No network calls
-at startup — cache embedded via `include_dir!` in `state.rs`.
+at startup — cache embedded via `include_dir!` in `state.rs`. The vsix bundles
+`bin/skript-lsp-windows-x64.exe` + `bin/skript-lsp-linux-x64` (static musl);
+rebuild slots with `bun run build:binary` (native) or
+`scripts/cross-build-binaries.sh` at the repo root (cross, from Linux).
 
 ## `.skriptrc.toml`
 

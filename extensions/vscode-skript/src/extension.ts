@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import { workspace, ExtensionContext, window, LogOutputChannel } from "vscode";
 import {
@@ -11,18 +12,33 @@ import {
 let client: LanguageClient | undefined;
 let outputChannel: LogOutputChannel;
 
+/** Name of the bundled binary for the current platform, or "" when unsupported. */
+function bundledBinaryName(): string {
+  if (process.arch !== "x64") return "";
+  switch (process.platform) {
+    case "win32":
+      return "skript-lsp-windows-x64.exe";
+    case "linux":
+      return "skript-lsp-linux-x64";
+    default:
+      return "";
+  }
+}
+
 function serverPath(context: ExtensionContext): string {
   const configured = workspace
     .getConfiguration("skript-lsp")
     .get<string>("serverPath");
   if (configured) return configured;
 
-  const extDir = context.extensionPath;
-  const binary = process.platform === "win32" ? "skript-lsp.exe" : "skript-lsp";
-  const bundled = path.join(extDir, "bin", binary);
-  if (require("fs").existsSync(bundled)) return bundled;
+  const name = bundledBinaryName();
+  if (name) {
+    const bundled = path.join(context.extensionPath, "bin", name);
+    if (fs.existsSync(bundled)) return bundled;
+  }
 
-  return binary;
+  // No bundled binary for this platform: fall back to a PATH lookup.
+  return "skript-lsp";
 }
 
 function buildClient(context: ExtensionContext): LanguageClient {
@@ -63,6 +79,17 @@ export function activate(context: ExtensionContext) {
   outputChannel = window.createOutputChannel("Skript LSP", { log: true });
 
   outputChannel.appendLine("Activating Skript LSP extension...");
+
+  const configured = workspace
+    .getConfiguration("skript-lsp")
+    .get<string>("serverPath");
+  if (!configured && !bundledBinaryName()) {
+    window.showWarningMessage(
+      `Skript LSP: no bundled binary for ${process.platform}-${process.arch}; ` +
+        'falling back to "skript-lsp" on PATH. ' +
+        "Set skript-lsp.serverPath to point at a custom build.",
+    );
+  }
 
   client = buildClient(context);
 

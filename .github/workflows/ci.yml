@@ -69,6 +69,12 @@ jobs:
         working-directory: extensions/vscode-skript
         run: bun run compile
 
+      - name: Verify bundled binaries
+        working-directory: extensions/vscode-skript
+        run: |
+          test -x bin/skript-lsp-linux-x64
+          test -f bin/skript-lsp-windows-x64.exe
+
       - name: Package vsix
         working-directory: extensions/vscode-skript
         run: bun run package

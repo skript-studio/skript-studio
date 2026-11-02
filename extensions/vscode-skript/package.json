@@ -83,7 +83,7 @@
     "install-ext": "code --install-extension skript-lsp.vsix",
     "dev:install": "bun run build:binary && bun run compile && bun run package && bun run install-ext",
     "download-cache": "curl -s https://skripthub.net/api/v1/addonsyntaxlist/ | bun normalize-cache.mjs",
-    "build:binary": "cargo build -p skript-lsp --release && Copy-Item -Force ..\\..\\target\\release\\skript-lsp.exe bin\\",
+    "build:binary": "bun build-binary.mjs",
     "prepublish": "bun run build:binary && bun run compile"
   },
   "author": "",

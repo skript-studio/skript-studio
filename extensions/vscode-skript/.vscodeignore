@@ -2,6 +2,8 @@
 .gitignore
 bun.lock
 normalize-cache.mjs
+build-binary.mjs
 tsconfig.json
 node_modules/
 src/
+*.vsix
