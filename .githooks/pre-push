@@ -1,0 +1,91 @@
+#!/bin/bash
+# .githooks/pre-push — gate pushes on cargo fmt + clippy + check.
+#
+# Enabled via: git config core.hooksPath .githooks
+#
+# Runs, in order, when the pushed range touches Rust code
+# (*.rs, Cargo.toml, Cargo.lock, build.rs, or this hook itself):
+#   1. cargo fmt --all -- --check     (formatting must be clean)
+#   2. cargo clippy --workspace --all-targets -- -D warnings
+#   3. cargo check --workspace --all-targets
+#
+# Any failure aborts the push. Fix the reported issues (usually just
+# `cargo fmt --all`), commit, and push again.
+#
+# Bypass (emergencies only):
+#   git push --no-verify ...
+#   SKIP_PRE_PUSH_CHECKS=1 git push ...
+#
+# Toolchain discovery: if `cargo` is not already on PATH, source the
+# repo's env.sh (sandbox: relocates the rustup/cargo homes). On machines
+# with a normal rustup install the hook uses that cargo as-is.
+
+set -u
+
+repo="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -n "${repo}" ] || exit 0
+cd "${repo}" || exit 1
+
+[ "${SKIP_PRE_PUSH_CHECKS:-0}" = "1" ] && { echo "[pre-push] skipped (SKIP_PRE_PUSH_CHECKS=1)"; exit 0; }
+
+if ! command -v cargo >/dev/null 2>&1 && [ -f "${repo}/env.sh" ]; then
+    # shellcheck disable=SC1091
+    . "${repo}/env.sh" >/dev/null 2>&1 || true
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "[pre-push] cargo not found on PATH — cannot verify the push." >&2
+    echo "[pre-push] install Rust, or bypass with --no-verify / SKIP_PRE_PUSH_CHECKS=1." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Decide whether this push touches Rust code. The hook receives one line
+# per pushed ref on stdin:  <local_ref> <local_sha> <remote_ref> <remote_sha>
+#   * deleted branch: local sha is all zeros        -> nothing to check
+#   * new branch:     remote sha is all zeros       -> check everything
+#   * fast-forward:   diff remote_sha..local_sha
+# ---------------------------------------------------------------------------
+touched=false
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "${local_sha}" in
+        0000000000000000000000000000000000000000*) continue ;;
+    esac
+    case "${remote_sha}" in
+        0000000000000000000000000000000000000000*) touched=true; continue ;;
+    esac
+    if git diff --name-only "${remote_sha}..${local_sha}" -- '*.rs' \
+            '*/Cargo.toml' 'Cargo.toml' 'Cargo.lock' '*/Cargo.lock' \
+            '*/build.rs' 'build.rs' '.githooks/*' \
+            | grep -q .; then
+        touched=true
+    fi
+done
+
+if [ "${touched}" = "false" ]; then
+    echo "[pre-push] no Rust changes in push range — skipping checks"
+    exit 0
+fi
+
+echo "[pre-push] Rust changes detected — running fmt / clippy / check"
+
+echo "==> cargo fmt --check"
+if ! cargo fmt --all -- --check; then
+    echo "[pre-push] FAIL: unformatted code. Run: cargo fmt --all" >&2
+    exit 1
+fi
+
+echo "==> cargo clippy"
+if ! cargo clippy --workspace --all-targets -- -D warnings; then
+    echo "[pre-push] FAIL: clippy reported issues. Fix them (cargo clippy --fix may help)." >&2
+    exit 1
+fi
+
+echo "==> cargo check"
+if ! cargo check --workspace --all-targets; then
+    echo "[pre-push] FAIL: cargo check failed." >&2
+    exit 1
+fi
+
+echo "[pre-push] all checks passed"
+exit 0

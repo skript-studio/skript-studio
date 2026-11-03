@@ -92,8 +92,7 @@ struct Inner {
     /// Request channel to the engine thread; `None` until the engine is
     /// started (always set while holding the `engine_state` lock). Checks
     /// and hovers share one FIFO channel so neither can starve the other.
-    engine_requests:
-        SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<EngineRequest>>>,
+    engine_requests: SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<EngineRequest>>>,
 }
 
 /// Lifecycle + stats of the engine thread.

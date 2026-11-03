@@ -274,18 +274,13 @@ fn hover_answers_while_check_requests_are_possible() {
             let exists = state
                 .with_index(|table| table.get(entry_id).is_some())
                 .unwrap_or(false);
-            assert!(
-                exists,
-                "entry id {entry_id} must exist in the entry table"
-            );
+            assert!(exists, "entry id {entry_id} must exist in the entry table");
 
             // Indented lines (the normal case inside `on ...:` blocks)
             // must match too: the raw editor line has a leading tab, which
             // used to make every pattern fail and hover returned null.
-            let indented = rt.block_on(state.hover_via_engine(
-                "\tbroadcast \"hi\"".to_owned(),
-                Some(4),
-            ));
+            let indented =
+                rt.block_on(state.hover_via_engine("\tbroadcast \"hi\"".to_owned(), Some(4)));
             assert!(
                 indented.is_some(),
                 "a tab-indented line must still match for hover"
@@ -296,21 +291,23 @@ fn hover_answers_while_check_requests_are_possible() {
             assert_eq!(span, (1, 15), "span must map back past the tab: {span:?}");
 
             // Trailing inline comments must be stripped before matching.
-            let commented = rt.block_on(state.hover_via_engine(
-                "broadcast \"hi\" # greet the world".to_owned(),
-                Some(3),
-            ));
+            let commented = rt.block_on(
+                state.hover_via_engine("broadcast \"hi\" # greet the world".to_owned(), Some(3)),
+            );
             assert!(
                 commented.is_some(),
                 "a line with a trailing comment must still match for hover"
             );
             let (_, span) = commented.unwrap();
-            assert_eq!(span, (0, 14), "comment must not be part of the span: {span:?}");
+            assert_eq!(
+                span,
+                (0, 14),
+                "comment must not be part of the span: {span:?}"
+            );
 
             // Comment-only lines must not match anything.
-            let comment_only = rt.block_on(
-                state.hover_via_engine("# just a comment".to_owned(), Some(3)),
-            );
+            let comment_only =
+                rt.block_on(state.hover_via_engine("# just a comment".to_owned(), Some(3)));
             assert!(comment_only.is_none(), "comment-only line must not match");
         }
     }
@@ -335,8 +332,7 @@ fn hover_and_check_interleave_on_shared_channel() {
             "broadcast \"hi\"\nfrobnicate the widgets\n".to_owned(),
             skript_checks::CheckConfig::default(),
         );
-        let hover_fut =
-            state.hover_via_engine("broadcast \"hi\"".to_owned(), Some(0));
+        let hover_fut = state.hover_via_engine("broadcast \"hi\"".to_owned(), Some(0));
         let (check, hover) = tokio::join!(check_fut, hover_fut);
         assert!(check.is_some(), "check must be answered");
         assert!(hover.is_some(), "hover must be answered too");

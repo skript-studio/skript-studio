@@ -10,7 +10,7 @@ set -u
 repo="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 [ -n "${repo}" ] || exit 0
 
-sync="/home/z/my-project/scripts/git_sync.py"
+sync="${repo}/scripts/git_sync.py"
 if [ -f "${sync}" ]; then
   msg="$(python3 "${sync}" 2>&1)"
   rc=$?
@@ -21,7 +21,7 @@ fi
 
 # --- fallback if git_sync.py is missing: plain push, never block the commit
 git symbolic-ref -q HEAD >/dev/null 2>&1 || exit 0
-wrapper="/home/z/my-project/scripts/git_ssh.py"
+wrapper="${repo}/scripts/git_ssh.py"
 if [ -f "${wrapper}" ]; then
   export GIT_SSH_COMMAND="python3 ${wrapper}"
 fi
