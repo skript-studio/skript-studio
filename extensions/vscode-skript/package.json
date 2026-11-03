@@ -2,7 +2,7 @@
   "name": "skript-lsp",
   "displayName": "Skript LSP",
   "description": "Language support for Skript (Minecraft scripting) via skript-lsp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "skript-studio",
   "license": "MIT",
   "repository": {

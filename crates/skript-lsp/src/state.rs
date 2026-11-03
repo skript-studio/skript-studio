@@ -17,7 +17,7 @@
 //! are `Rc<RefCell<…>>`-based (`!Send`), so the compiled `Registry` can
 //! never be shared with async tasks — it is built, matched against, and
 //! dropped entirely on that thread. The rest of the server only ever
-//! sees `Send` handles: the request channels
+//! sees `Send` handles: the request channel
 //! ([`AppState::check_document_via_engine`],
 //! [`AppState::hover_via_engine`]) and plain data
 //! (`skript_checks::LineDiagnostic`s).
@@ -90,12 +90,10 @@ struct Inner {
     engine_state: SyncMutex<EngineState>,
     engine_state_cv: Condvar,
     /// Request channel to the engine thread; `None` until the engine is
-    /// started (always set while holding the `engine_state` lock).
-    check_requests: SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<CheckRequest>>>,
-    /// Hover request channel to the engine thread; `None` until the engine
-    /// is started. Separate from `check_requests` so hover and check
-    /// requests don't block each other.
-    hover_requests: SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<HoverRequest>>>,
+    /// started (always set while holding the `engine_state` lock). Checks
+    /// and hovers share one FIFO channel so neither can starve the other.
+    engine_requests:
+        SyncMutex<Option<tokio::sync::mpsc::UnboundedSender<EngineRequest>>>,
 }
 
 /// Lifecycle + stats of the engine thread.
@@ -122,6 +120,19 @@ pub struct EngineStats {
     pub patterns_compiled: usize,
     /// Split patterns that failed to compile.
     pub compile_failures: usize,
+}
+
+/// Everything the async side can ask the engine thread to do.
+///
+/// Both request kinds deliberately share ONE channel: the engine thread
+/// serves requests strictly in arrival order. The previous design used
+/// two channels with `blocking_recv` on the check channel first — which
+/// *blocks* — so hover requests were never served while the check sender
+/// was alive (the server holds it for its whole lifetime) and every hover
+/// hung until the client cancelled it (VSCode: perpetual "Loading..").
+enum EngineRequest {
+    Check(CheckRequest),
+    Hover(HoverRequest),
 }
 
 /// One document check sent to the engine thread.
@@ -188,8 +199,7 @@ impl AppState {
                 refresh_lock: Mutex::new(()),
                 engine_state: SyncMutex::new(EngineState::Idle),
                 engine_state_cv: Condvar::new(),
-                check_requests: SyncMutex::new(None),
-                hover_requests: SyncMutex::new(None),
+                engine_requests: SyncMutex::new(None),
             }),
         }
     }
@@ -354,22 +364,15 @@ impl AppState {
         match *state {
             EngineState::Idle => {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                let (htx, hrx) = tokio::sync::mpsc::unbounded_channel();
                 {
-                    // Lock order is always engine_state → check_requests; no
+                    // Lock order is always engine_state → engine_requests; no
                     // other path nests these two locks.
                     let mut requests = self
                         .inner
-                        .check_requests
+                        .engine_requests
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *requests = Some(tx);
-                    let mut hover_requests = self
-                        .inner
-                        .hover_requests
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *hover_requests = Some(htx);
                 }
                 *state = EngineState::Building;
                 // Release the state lock before spawning so the new thread
@@ -389,7 +392,7 @@ impl AppState {
                         // with the request channel) instead of hanging.
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                                engine_thread_main(engine_state, rx, hrx);
+                                engine_thread_main(engine_state, rx);
                             }));
                         if outcome.is_err() {
                             tracing::error!(
@@ -473,7 +476,7 @@ impl AppState {
         let sender = {
             let guard = self
                 .inner
-                .check_requests
+                .engine_requests
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             guard.clone()
@@ -481,11 +484,11 @@ impl AppState {
         let sender = sender?;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         sender
-            .send(CheckRequest {
+            .send(EngineRequest::Check(CheckRequest {
                 text,
                 config,
                 reply: reply_tx,
-            })
+            }))
             .ok()?;
         match reply_rx.await {
             Ok(CheckReply::Diagnostics(diags)) => Some(diags),
@@ -512,7 +515,7 @@ impl AppState {
         let sender = {
             let guard = self
                 .inner
-                .hover_requests
+                .engine_requests
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             guard.clone()
@@ -520,11 +523,11 @@ impl AppState {
         let sender = sender?;
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         sender
-            .send(HoverRequest {
+            .send(EngineRequest::Hover(HoverRequest {
                 line,
                 cursor,
                 reply: reply_tx,
-            })
+            }))
             .ok()?;
         match reply_rx.await {
             Ok(HoverReply::Match { entry_id, span }) => Some((entry_id, span)),
@@ -559,8 +562,7 @@ impl AppState {
 /// compiled registry for the whole thread lifetime.
 fn engine_thread_main(
     state: AppState,
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<CheckRequest>,
-    mut hrx: tokio::sync::mpsc::UnboundedReceiver<HoverRequest>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<EngineRequest>,
 ) {
     // skript-patterns matching consults a thread-local type resolver; this
     // is the only thread that compiles or matches patterns, so install the
@@ -606,52 +608,54 @@ fn engine_thread_main(
         }
     };
 
-    // Serve check + hover requests until both channels close (server
-    // shutdown). A panic inside `check_document` or `match_line_for_hover`
-    // unwinds out of the loop and is contained by the catch_unwind at the
-    // spawn site: both channels (and their oneshot senders) drop, so
-    // awaiting callers see an error and fall back gracefully.
-    loop {
-        // Try check requests first (higher priority — diagnostics).
-        if let Some(request) = rx.blocking_recv() {
-            let reply = match registry.as_ref() {
-                Some(reg) => {
-                    skript_patterns::set_type_resolver(Rc::new(
-                        skript_patterns::PermissiveResolver,
-                    ));
-                    CheckReply::Diagnostics(skript_checks::check_document(
-                        &request.text,
-                        reg,
-                        &request.config,
-                    ))
-                }
-                None => CheckReply::Unavailable,
-            };
-            let _ = request.reply.send(reply);
-            continue;
-        }
-        // Then hover requests.
-        if let Some(request) = hrx.blocking_recv() {
-            let reply = match registry.as_ref() {
-                Some(reg) => {
-                    skript_patterns::set_type_resolver(Rc::new(
-                        skript_patterns::PermissiveResolver,
-                    ));
-                    match skript_checks::match_line_for_hover(&request.line, request.cursor, reg) {
-                        Some(m) => HoverReply::Match {
-                            entry_id: m.entry_id,
-                            span: m.span,
-                        },
-                        None => HoverReply::None,
+    // Serve requests until the channel closes (server shutdown). Checks
+    // and hovers share the channel, so each is answered strictly in
+    // arrival order — neither can starve the other. A panic inside
+    // `check_document` or `match_line_for_hover` unwinds out of the loop
+    // and is contained by the catch_unwind at the spawn site: the channel
+    // (and the oneshot senders inside queued requests) drop, so awaiting
+    // callers see an error and fall back gracefully.
+    while let Some(request) = rx.blocking_recv() {
+        match request {
+            EngineRequest::Check(request) => {
+                let reply = match registry.as_ref() {
+                    Some(reg) => {
+                        skript_patterns::set_type_resolver(Rc::new(
+                            skript_patterns::PermissiveResolver,
+                        ));
+                        CheckReply::Diagnostics(skript_checks::check_document(
+                            &request.text,
+                            reg,
+                            &request.config,
+                        ))
                     }
-                }
-                None => HoverReply::None,
-            };
-            let _ = request.reply.send(reply);
-            continue;
+                    None => CheckReply::Unavailable,
+                };
+                let _ = request.reply.send(reply);
+            }
+            EngineRequest::Hover(request) => {
+                let reply = match registry.as_ref() {
+                    Some(reg) => {
+                        skript_patterns::set_type_resolver(Rc::new(
+                            skript_patterns::PermissiveResolver,
+                        ));
+                        match skript_checks::match_line_for_hover(
+                            &request.line,
+                            request.cursor,
+                            reg,
+                        ) {
+                            Some(m) => HoverReply::Match {
+                                entry_id: m.entry_id,
+                                span: m.span,
+                            },
+                            None => HoverReply::None,
+                        }
+                    }
+                    None => HoverReply::None,
+                };
+                let _ = request.reply.send(reply);
+            }
         }
-        // Both channels closed — shutdown.
-        break;
     }
 }
 

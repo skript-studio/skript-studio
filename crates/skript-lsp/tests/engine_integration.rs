@@ -213,3 +213,132 @@ fn engine_flags_unparseable_line() {
     assert_eq!(lsp.range.end.line, 1);
     assert!(lsp.range.end.character > lsp.range.start.character);
 }
+
+// --- hover through the engine thread -----------------------------------------
+
+/// Regression test (2026-11): the engine thread used to run a two-channel
+/// loop with `rx.blocking_recv()` on the check channel FIRST — a *blocking*
+/// wait. While the check sender was alive (the server holds it for its
+/// whole lifetime) the hover branch was unreachable, so every
+/// `textDocument/hover` request queued forever and VSCode showed a
+/// perpetual "Loading.." popup. Checks and hovers now share one FIFO
+/// channel; this test fails by timing out if the starvation ever returns.
+#[test]
+fn hover_answers_while_check_requests_are_possible() {
+    let state = AppState::new(EffectiveConfig::default());
+    state.ensure_engine();
+    assert!(state.engine_stats().is_some(), "engine must be ready");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+
+    // Install the SkriptHub entry table exactly like a live server's
+    // initialize() does, so entry IDs from the engine resolve.
+    rt.block_on(state.refresh());
+    assert!(state.ready(), "entry table must be installed");
+
+    // 1. Serve one check request. The check sender stays alive inside
+    //    `AppState` afterwards — exactly the live-server situation that
+    //    used to starve the hover channel.
+    let diags = rt.block_on(state.check_document_via_engine(
+        "broadcast \"hi\"\n".to_owned(),
+        skript_checks::CheckConfig::default(),
+    ));
+    assert!(diags.is_some(), "the check request must be answered");
+
+    // 2. A hover request must now still be answered within the timeout.
+    let hover = rt.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            state.hover_via_engine("broadcast \"hi\"".to_owned(), Some(3)),
+        )
+        .await
+    });
+    match hover {
+        // Timed out — the starvation bug is back.
+        Err(_) => panic!(
+            "hover_via_engine never answered while the check channel was \
+             open — the engine thread is starving hover requests again"
+        ),
+        // Answered, but no match: acceptable only if the corpus really has
+        // no pattern for this line, which would be a corpus regression.
+        Ok(None) => panic!("'broadcast \"hi\"' must match at least one pattern"),
+        Ok(Some((entry_id, span))) => {
+            assert!(
+                span.0 <= 3 && 3 <= span.1,
+                "cursor 3 must fall inside the reported span {span:?}"
+            );
+            // The entry ID must resolve to a real SkriptHub entry.
+            let exists = state
+                .with_index(|table| table.get(entry_id).is_some())
+                .unwrap_or(false);
+            assert!(
+                exists,
+                "entry id {entry_id} must exist in the entry table"
+            );
+
+            // Indented lines (the normal case inside `on ...:` blocks)
+            // must match too: the raw editor line has a leading tab, which
+            // used to make every pattern fail and hover returned null.
+            let indented = rt.block_on(state.hover_via_engine(
+                "\tbroadcast \"hi\"".to_owned(),
+                Some(4),
+            ));
+            assert!(
+                indented.is_some(),
+                "a tab-indented line must still match for hover"
+            );
+            // The reported span must be in ORIGINAL line coordinates
+            // (offset 1, past the tab), not the trimmed line's.
+            let (_, span) = indented.unwrap();
+            assert_eq!(span, (1, 15), "span must map back past the tab: {span:?}");
+
+            // Trailing inline comments must be stripped before matching.
+            let commented = rt.block_on(state.hover_via_engine(
+                "broadcast \"hi\" # greet the world".to_owned(),
+                Some(3),
+            ));
+            assert!(
+                commented.is_some(),
+                "a line with a trailing comment must still match for hover"
+            );
+            let (_, span) = commented.unwrap();
+            assert_eq!(span, (0, 14), "comment must not be part of the span: {span:?}");
+
+            // Comment-only lines must not match anything.
+            let comment_only = rt.block_on(
+                state.hover_via_engine("# just a comment".to_owned(), Some(3)),
+            );
+            assert!(comment_only.is_none(), "comment-only line must not match");
+        }
+    }
+}
+
+/// Hover and check requests interleave correctly on the shared channel:
+/// a hover sent while a check is still being served is answered right
+/// after it, not dropped or reordered into silence.
+#[test]
+fn hover_and_check_interleave_on_shared_channel() {
+    let state = AppState::new(EffectiveConfig::default());
+    state.ensure_engine();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+
+    rt.block_on(async {
+        // Fire both concurrently; the check is the slower one.
+        let check_fut = state.check_document_via_engine(
+            "broadcast \"hi\"\nfrobnicate the widgets\n".to_owned(),
+            skript_checks::CheckConfig::default(),
+        );
+        let hover_fut =
+            state.hover_via_engine("broadcast \"hi\"".to_owned(), Some(0));
+        let (check, hover) = tokio::join!(check_fut, hover_fut);
+        assert!(check.is_some(), "check must be answered");
+        assert!(hover.is_some(), "hover must be answered too");
+    });
+}

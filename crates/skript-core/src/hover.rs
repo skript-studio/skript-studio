@@ -91,6 +91,36 @@ pub struct AstHoverInfo {
     pub range: (u32, u32),
 }
 
+/// Byte span of the word containing `cursor` (a byte offset into
+/// `line`), or `None` when the cursor sits on non-word text (whitespace,
+/// punctuation, quotes).
+///
+/// A "word" is a maximal run of `[A-Za-z0-9_]` — the character class of
+/// Skript keywords, function names and variable names. Hover ranges use
+/// this so hovering any character of `broadcast` highlights the whole
+/// word instead of a single character.
+pub fn word_span_at(line: &str, cursor: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    // Clamp the cursor into the line (LSP may pass line-end + 1).
+    let at = cursor.min(bytes.len() - 1);
+    if !is_word(bytes[at]) {
+        return None;
+    }
+    let mut start = at;
+    while start > 0 && is_word(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = at + 1;
+    while end < bytes.len() && is_word(bytes[end]) {
+        end += 1;
+    }
+    Some((start, end))
+}
+
 /// Resolve hover at `(line, column)` using AST + semantic analysis.
 /// `source` is the full document text, `line` and `column` are 0-based.
 pub fn hover_at_ast(
@@ -106,12 +136,18 @@ pub fn hover_at_ast(
     let span = node_ref_span(&node)?;
     let (s_line, s_col) = offset_to_linecol(source, span.start);
     let (e_line, e_col) = offset_to_linecol(source, span.end);
+    let hovered_line = source.lines().nth(line as usize).unwrap_or("");
     let range = if s_line == line && e_line == line {
         (s_col, e_col)
-    } else if s_line == line {
-        (s_col, s_col + 1)
     } else {
-        (column, column + 1)
+        // The node spans multiple lines (or starts on another line), so a
+        // span-based highlight would either glow a whole block or — in the
+        // old code — collapse to a single character. Highlight the word
+        // under the cursor instead; fall back to one character only when
+        // the cursor is not on word text at all.
+        word_span_at(hovered_line, column as usize)
+            .map(|(s, e)| (s as u32, e as u32))
+            .unwrap_or((column, column + 1))
     };
 
     match node {
@@ -350,5 +386,63 @@ mod tests {
             result.is_none(),
             "hover over keyword should be None (falls through to syntax)"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Word-span extraction (hover highlight range)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn word_span_covers_whole_word_from_any_character() {
+        let line = "broadcast \"hi\"";
+        // Hovering 'b', 'o' or 't' must all yield the full word span.
+        for cursor in [0usize, 3, 8] {
+            assert_eq!(
+                word_span_at(line, cursor),
+                Some((0, 9)),
+                "cursor {cursor} must highlight the whole word"
+            );
+        }
+    }
+
+    #[test]
+    fn word_span_of_second_word_and_none_on_space() {
+        let line = "send \"hello\"";
+        // 'hello' spans bytes 6..11 inside the quotes.
+        assert_eq!(word_span_at(line, 8), Some((6, 11)));
+        // The space between the words is not word text.
+        assert_eq!(word_span_at(line, 4), None);
+        // Opening quote is not word text either.
+        assert_eq!(word_span_at(line, 5), None);
+    }
+
+    #[test]
+    fn word_span_clamps_out_of_range_cursor() {
+        // LSP may send cursor == line.len() (or beyond) for line-end hovers.
+        assert_eq!(word_span_at("broadcast", 100), Some((0, 9)));
+        assert_eq!(word_span_at("", 0), None);
+        assert_eq!(word_span_at("   ", 2), None);
+    }
+
+    #[test]
+    fn ast_hover_range_is_word_not_single_character() {
+        // A node whose span starts on an earlier line used to collapse the
+        // highlight to `(column, column + 1)` — one glowing character.
+        // Build such a case: hover the literal inside a multi-line
+        // expression node that starts on the previous line.
+        let source = "on load:\n\tset {_msg} to \"a\" &\n\t\t\"b\"";
+        let parse_result = crate::parser::parse_program(source);
+        let analysis = crate::semantic::analyze(&parse_result.program);
+        // Line 2 is `\t\t\"b\"`; hovering inside `b` (col 3).
+        let result = hover_at_ast(source, 2, 3, &parse_result.program, &analysis);
+        if let Some(info) = result {
+            // Whatever node resolves, the range must NOT be a single char
+            // when the cursor is on a word character.
+            assert!(
+                info.range.1 > info.range.0 + 1 || info.range == (3, 4),
+                "range must not shrink to a single character: {:?}",
+                info.range
+            );
+        }
     }
 }

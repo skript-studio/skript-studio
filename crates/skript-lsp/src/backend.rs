@@ -560,10 +560,13 @@ impl LanguageServer for Backend {
         // 1. Syntax docs from SkriptHub via the pattern engine thread.
         //    The engine matches the line against all 13,661 compiled patterns
         //    and returns the best-matching entry ID. We resolve it to a
-        //    SyntaxEntry via EntryTable for markdown rendering.
+        //    SyntaxEntry via EntryTable for markdown rendering. The engine's
+        //    span covers the whole line; highlight just the word under the
+        //    cursor (fall back to the line span on non-word text).
+        let cursor = pos.character as usize;
         let syntax_hover = match self
             .state
-            .hover_via_engine(line.to_string(), Some(pos.character as usize))
+            .hover_via_engine(line.to_string(), Some(cursor))
             .await
         {
             Some((entry_id, span)) => self
@@ -571,7 +574,10 @@ impl LanguageServer for Backend {
                 .with_index(|table| {
                     table.get(entry_id).map(|entry| hover::HoverInfo {
                         markdown: hover::render(entry),
-                        range: (span.0 as u32, span.1 as u32),
+                        range: match hover::word_span_at(line, cursor) {
+                            Some((s, e)) => (s as u32, e as u32),
+                            None => (span.0 as u32, span.1 as u32),
+                        },
                     })
                 })
                 .flatten(),

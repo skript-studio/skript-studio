@@ -511,6 +511,11 @@ pub struct HoverMatch {
 /// Match a line against all compiled patterns in the registry, returning
 /// the best match for hover purposes.
 ///
+/// The line is preprocessed exactly like the diagnostics path (inline
+/// comment stripped, surrounding whitespace trimmed) — a raw indented
+/// line from the editor would otherwise fail every pattern. The returned
+/// span is in ORIGINAL line coordinates.
+///
 /// Unlike `collect_matches` (which is for diagnostics and filters by
 /// candidate syntax types), this searches ALL syntax types and returns
 /// the single best match — the one whose span most tightly covers the
@@ -523,6 +528,18 @@ pub fn match_line_for_hover(
     cursor: Option<usize>,
     registry: &Registry,
 ) -> Option<HoverMatch> {
+    // Mirror the diagnostics path's preprocessing (see `check_document`):
+    // strip the inline comment and surrounding whitespace before
+    // matching, or the leading tab of an indented line makes every
+    // pattern fail. The reported span stays in ORIGINAL line
+    // coordinates so callers don't have to adjust.
+    let code = strip_inline_comment(line);
+    let lead = code.len() - code.trim_start().len();
+    let stripped = code.trim();
+    // Blank / comment-only lines have nothing to hover.
+    if stripped.is_empty() {
+        return None;
+    }
     let all_types = [
         SyntaxType::Effect,
         SyntaxType::Condition,
@@ -542,10 +559,12 @@ pub fn match_line_for_hover(
                 }
                 if compiled
                     .pattern
-                    .match_(line, ParseFlags::ALL, ParseContext::Default)
+                    .match_(stripped, ParseFlags::ALL, ParseContext::Default)
                     .is_some()
                 {
-                    let span = (0, line.len()); // full-line span for hover
+                    // Full code span of the line, mapped back to the
+                    // original (unstripped) coordinates.
+                    let span = (lead, lead + stripped.len());
                     let entry_id = registry.entries()[entry_index].id as u32;
                     let candidate = HoverMatch {
                         entry_index,
