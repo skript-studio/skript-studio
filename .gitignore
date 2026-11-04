@@ -40,3 +40,6 @@ apps/skript-studio-ui/src-tauri/skript-lsp-*.exe
 # Z.ai sync mechanism
 
 # .secrets/ contains deploy keys (gitignored)
+
+# Bundled LSP binaries are build artifacts — never commit (see bin/README.md)
+extensions/vscode-skript/bin/skript-lsp-*
