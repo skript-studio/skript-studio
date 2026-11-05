@@ -72,7 +72,8 @@ fn line_diagnostic_mapping_matches_contract() {
         code: "addon-not-enabled",
         message: "this line requires the SkBee addon".to_owned(),
     };
-    let lsp = skript_lsp::backend::line_diagnostic_to_lsp(d);
+    let source = "line 0\nline 1\nline 2\nabcdefghijklmnop";
+    let lsp = skript_lsp::backend::line_diagnostic_to_lsp(d, source);
 
     assert_eq!(lsp.range.start, Position::new(3, 4));
     assert_eq!(lsp.range.end, Position::new(3, 12));
@@ -85,14 +86,17 @@ fn line_diagnostic_mapping_matches_contract() {
 
     // Severity triad: Error→1, Warning→2, Info→3.
     let sev = |s| {
-        skript_lsp::backend::line_diagnostic_to_lsp(skript_checks::LineDiagnostic {
-            line: 0,
-            col_start: 0,
-            col_end: 1,
-            severity: s,
-            code: "x",
-            message: String::new(),
-        })
+        skript_lsp::backend::line_diagnostic_to_lsp(
+            skript_checks::LineDiagnostic {
+                line: 0,
+                col_start: 0,
+                col_end: 1,
+                severity: s,
+                code: "x",
+                message: String::new(),
+            },
+            "x",
+        )
         .severity
     };
     assert_eq!(
@@ -192,7 +196,9 @@ fn engine_flags_unparseable_line() {
 
     let script = "broadcast \"hi\"\nfrobnicate the widgets\n".to_owned();
     let diags = rt
-        .block_on(state.check_document_via_engine(script, skript_checks::CheckConfig::default()))
+        .block_on(
+            state.check_document_via_engine(script.clone(), skript_checks::CheckConfig::default()),
+        )
         .expect("the engine must answer");
 
     // Exactly one Error in the whole document …
@@ -207,7 +213,7 @@ fn engine_flags_unparseable_line() {
     assert_eq!(errors[0].line, 1, "the garbage line is line index 1");
 
     // The LSP mapping preserves severity and line.
-    let lsp = skript_lsp::backend::line_diagnostic_to_lsp(errors[0].clone());
+    let lsp = skript_lsp::backend::line_diagnostic_to_lsp(errors[0].clone(), &script);
     assert_eq!(lsp.severity, Some(DiagnosticSeverity::ERROR));
     assert_eq!(lsp.range.start.line, 1);
     assert_eq!(lsp.range.end.line, 1);

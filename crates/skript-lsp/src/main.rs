@@ -22,6 +22,7 @@
 mod backend;
 mod folding;
 mod options;
+mod position;
 mod state;
 mod ws;
 

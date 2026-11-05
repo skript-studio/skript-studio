@@ -12,7 +12,8 @@ use crate::syntax::SyntaxEntry;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoverInfo {
     pub markdown: String,
-    /// `(start_col, end_col)` of the highlighted range on the line, 0-based.
+    /// `(start_col, end_col)` of the highlighted range on the line, 0-based
+    /// **byte** columns (the LSP layer converts them to UTF-16).
     pub range: (u32, u32),
 }
 
@@ -87,7 +88,8 @@ use crate::validation::offset_to_linecol;
 #[derive(Debug, Clone, PartialEq)]
 pub struct AstHoverInfo {
     pub markdown: String,
-    /// `(start_col, end_col)` on the hovered line, 0-based.
+    /// `(start_col, end_col)` on the hovered line, 0-based **byte** columns
+    /// (the LSP layer converts them to UTF-16).
     pub range: (u32, u32),
 }
 
@@ -100,29 +102,69 @@ pub struct AstHoverInfo {
 /// this so hovering any character of `broadcast` highlights the whole
 /// word instead of a single character.
 pub fn word_span_at(line: &str, cursor: usize) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    if bytes.is_empty() {
+    if line.is_empty() {
         return None;
     }
-    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    // Clamp the cursor into the line (LSP may pass line-end + 1).
-    let at = cursor.min(bytes.len() - 1);
-    if !is_word(bytes[at]) {
+    // Clamp the cursor into the line (LSP may pass line-end + 1) and onto a
+    // character boundary (never slice a multi-byte character).
+    let mut at = cursor.min(line.len());
+    while at > 0 && !line.is_char_boundary(at) {
+        at -= 1;
+    }
+    if at == line.len() {
+        at = previous_char_boundary(line, at);
+    }
+    if !is_word_at(line, at) {
         return None;
     }
     let mut start = at;
-    while start > 0 && is_word(bytes[start - 1]) {
-        start -= 1;
+    while start > 0 {
+        let prev = previous_char_boundary(line, start);
+        if !is_word_at(line, prev) {
+            break;
+        }
+        start = prev;
     }
-    let mut end = at + 1;
-    while end < bytes.len() && is_word(bytes[end]) {
-        end += 1;
+    let mut end = at + char_len_at(line, at);
+    while end < line.len() && is_word_at(line, end) {
+        end += char_len_at(line, end);
     }
     Some((start, end))
 }
 
+/// Byte offset of the character boundary immediately before `at` (`at > 0`).
+fn previous_char_boundary(line: &str, at: usize) -> usize {
+    let mut i = at.saturating_sub(1);
+    while i > 0 && !line.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// UTF-8 length of the character starting at `at` (which must be a boundary).
+fn char_len_at(line: &str, at: usize) -> usize {
+    line[at..].chars().next().map(char::len_utf8).unwrap_or(0)
+}
+
+/// Whether the character at `at` is part of a hoverable Skript word.
+///
+/// A character immediately preceded by `§` is part of a colour/format code
+/// (`§a`, `§b`, …), not a word, even though the code letter itself is ASCII
+/// alphanumeric. Without this, `§dhello` would merge into one word.
+fn is_word_at(line: &str, at: usize) -> bool {
+    let Some(ch) = line[at..].chars().next() else {
+        return false;
+    };
+    if !(ch.is_ascii_alphanumeric() || ch == '_') {
+        return false;
+    }
+    !line[..at].ends_with('\u{00A7}')
+}
+
 /// Resolve hover at `(line, column)` using AST + semantic analysis.
-/// `source` is the full document text, `line` and `column` are 0-based.
+/// `source` is the full document text; `line` is 0-based and `column` is a
+/// 0-based **UTF-8 byte** column. LSP clients send UTF-16 columns, so the
+/// server converts at the protocol boundary before calling this.
 pub fn hover_at_ast(
     source: &str,
     line: u32,
@@ -147,7 +189,20 @@ pub fn hover_at_ast(
         // the cursor is not on word text at all.
         word_span_at(hovered_line, column as usize)
             .map(|(s, e)| (s as u32, e as u32))
-            .unwrap_or((column, column + 1))
+            .unwrap_or_else(|| {
+                // Non-word text: highlight one whole character. `column`
+                // is a byte column, so clamp to a boundary before slicing.
+                let mut start = (column as usize).min(hovered_line.len());
+                while start > 0 && !hovered_line.is_char_boundary(start) {
+                    start -= 1;
+                }
+                let end = hovered_line[start..]
+                    .chars()
+                    .next()
+                    .map(|c| start + c.len_utf8())
+                    .unwrap_or(start);
+                (start as u32, end as u32)
+            })
     };
 
     match node {
@@ -422,6 +477,24 @@ mod tests {
         assert_eq!(word_span_at("broadcast", 100), Some((0, 9)));
         assert_eq!(word_span_at("", 0), None);
         assert_eq!(word_span_at("   ", 2), None);
+    }
+
+    #[test]
+    fn word_span_does_not_merge_a_colour_code_into_the_next_word() {
+        // \tbroadcast §a§b§c§dhello world
+        // 'd' at byte 22 belongs to `§d`; "hello" starts at byte 23.
+        let line = "\tbroadcast §a§b§c§dhello world";
+        assert_eq!(word_span_at(line, 23), Some((23, 28)));
+        assert_eq!(word_span_at(line, 22), None);
+    }
+
+    #[test]
+    fn word_span_clamps_mid_character_cursors() {
+        // Byte 1 is the continuation byte of `§`; `§h` is a format code, so
+        // the first hoverable word starts at `e` (byte 3).
+        let line = "§hello";
+        assert_eq!(word_span_at(line, 1), None);
+        assert_eq!(word_span_at(line, 3), Some((3, 7)));
     }
 
     #[test]

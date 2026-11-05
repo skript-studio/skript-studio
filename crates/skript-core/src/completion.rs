@@ -243,23 +243,27 @@ pub fn complete_functions(prefix: &str, registry: &FunctionRegistry) -> Vec<Comp
     items
 }
 
-/// Convert (line, column) to byte offset. Both are 0-based.
+/// Convert (line, column) to a byte offset. Both are 0-based.
+///
+/// `column` is a **UTF-8 byte column** within the line, matching the rest of
+/// `skript-core`; LSP clients send UTF-16 code units, so the server converts
+/// at the protocol boundary before calling this.
 pub fn linecol_to_offset(source: &str, line: u32, column: u32) -> usize {
     let mut current_line = 0u32;
-    let mut offset = 0usize;
+    let mut line_start = 0usize;
     for (i, c) in source.char_indices() {
         if current_line == line {
-            offset = i + column as usize;
             break;
         }
         if c == '\n' {
             current_line += 1;
+            line_start = i + 1;
         }
     }
     if current_line < line {
         source.len()
     } else {
-        offset.min(source.len())
+        (line_start + column as usize).min(source.len())
     }
 }
 
@@ -642,5 +646,18 @@ mod tests {
         assert_eq!(linecol_to_offset(source, 1, 0), 6);
         assert_eq!(linecol_to_offset(source, 2, 0), 12);
         assert_eq!(linecol_to_offset(source, 5, 0), source.len());
+        // Byte columns, not character counts: the second line starts at
+        // byte 5 and its single `§` occupies bytes 5..7.
+        assert_eq!(linecol_to_offset("§§\n§", 0, 2), 2);
+        assert_eq!(linecol_to_offset("§§\n§", 1, 1), 6);
+        assert_eq!(linecol_to_offset("§§\n§", 1, 2), 7);
+    }
+
+    #[test]
+    fn test_linecol_to_offset_trailing_newline_has_an_empty_last_line() {
+        let source = "a\n";
+        assert_eq!(linecol_to_offset(source, 1, 0), 2);
+        assert_eq!(linecol_to_offset(source, 1, 5), 2);
+        assert_eq!(linecol_to_offset("\n", 1, 0), 1);
     }
 }

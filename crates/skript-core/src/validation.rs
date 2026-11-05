@@ -24,8 +24,9 @@ pub enum Severity {
     Hint = 4,
 }
 
-/// A source-language-agnostic diagnostic. The LSP layer converts the
-/// 0-indexed `line` and `start`/`end` columns into `tower-lsp` ranges.
+/// A source-language-agnostic diagnostic. `line` is 0-based and
+/// `start_col`/`end_col` are 0-based **UTF-8 byte** columns within that line;
+/// the LSP layer converts them into UTF-16 `tower-lsp` ranges.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub line: u32,
@@ -39,7 +40,7 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// Convert a byte `offset` in `source` to 0-based (line, col).
+/// Convert a byte `offset` in `source` to 0-based (line, byte column).
 pub fn offset_to_linecol(source: &str, offset: usize) -> (u32, u32) {
     let mut line = 0u32;
     let mut last_newline = 0usize;

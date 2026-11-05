@@ -42,6 +42,9 @@ impl SemanticType {
 }
 
 /// A typed span in the document.
+///
+/// `col` and `length` are **UTF-8 byte** offsets into the line; the LSP
+/// layer converts them to UTF-16 code units when encoding semantic tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticToken {
     pub line: u32,
@@ -50,7 +53,8 @@ pub struct SemanticToken {
     pub ty: SemanticType,
 }
 
-/// Tokenize a whole document into semantic tokens. Line/column are 0-based.
+/// Tokenize a whole document into semantic tokens. `line` is 0-based and
+/// `col`/`length` are UTF-8 byte offsets within that line.
 pub fn tokenize(text: &str) -> Vec<SemanticToken> {
     use crate::lexer::{Lexer, Token};
 

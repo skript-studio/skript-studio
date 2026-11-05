@@ -29,6 +29,7 @@
 
 use crate::folding;
 use crate::options::{EffectiveConfig, InitOptions, ParserDiagnostics, SkriptRcToml};
+use crate::position::{byte_offset_to_utf16_col, utf16_col_to_byte_offset};
 use crate::state::AppState;
 use serde_json::Value;
 use skript_core::ast::Visitor;
@@ -189,11 +190,13 @@ fn core_lsp_diagnostics(state: &AppState, uri: &str, text: &str) -> Vec<Diagnost
             } else {
                 severity_to_lsp(d.severity)
             };
+            // `offset_to_linecol` reports UTF-8 byte columns; the LSP
+            // client expects UTF-16 code units.
+            let line_text = line_text_at(text, d.line).unwrap_or("");
+            let start = byte_offset_to_utf16_col(line_text, d.start_col as usize);
+            let end = byte_offset_to_utf16_col(line_text, d.end_col as usize).max(start);
             Some(Diagnostic {
-                range: Range::new(
-                    Position::new(d.line, d.start_col),
-                    Position::new(d.line, d.end_col),
-                ),
+                range: Range::new(Position::new(d.line, start), Position::new(d.line, end)),
                 severity: Some(severity),
                 source: Some(d.source),
                 code: Some(tower_lsp::lsp_types::NumberOrString::String(d.code)),
@@ -220,7 +223,11 @@ async fn publish_merged_diagnostics(state: &AppState, client: &tower_lsp::Client
         .check_document_via_engine(text.clone(), build_check_config(&config))
         .await
     {
-        lsp_diags.extend(line_diags.into_iter().map(line_diagnostic_to_lsp));
+        lsp_diags.extend(
+            line_diags
+                .into_iter()
+                .map(|d| line_diagnostic_to_lsp(d, &text)),
+        );
     }
 
     if let Ok(parsed) = uri.parse::<tower_lsp::lsp_types::Url>() {
@@ -241,16 +248,20 @@ pub fn build_check_config(config: &EffectiveConfig) -> skript_checks::CheckConfi
 /// Map a `skript-checks` `LineDiagnostic` to an LSP `Diagnostic`.
 ///
 /// Severity: Error→1, Warning→2, Info→3. `LineDiagnostic` line/column
-/// fields are 0-based **character** counts (Unicode scalar values) while LSP
-/// positions are UTF-16 code units; the two coincide for all BMP characters,
-/// which covers the Skript corpus and typical scripts. This mirrors the
-/// approximation already used by the core path (see
-/// `char_index_for_column`).
-pub fn line_diagnostic_to_lsp(d: skript_checks::LineDiagnostic) -> Diagnostic {
+/// fields are 0-based **character** counts (Unicode scalar values), LSP
+/// positions are UTF-16 code units, and the source itself is indexed in
+/// UTF-8 bytes. `source` is the document text used to resolve the line so
+/// both conversions stay boundary-safe.
+pub fn line_diagnostic_to_lsp(d: skript_checks::LineDiagnostic, source: &str) -> Diagnostic {
+    let line_text = line_text_at(source, d.line as u32).unwrap_or("");
+    let start_byte = char_col_to_byte_offset(line_text, d.col_start);
+    let end_byte = char_col_to_byte_offset(line_text, d.col_end);
+    let start = byte_offset_to_utf16_col(line_text, start_byte);
+    let end = byte_offset_to_utf16_col(line_text, end_byte).max(start);
     Diagnostic {
         range: Range::new(
-            Position::new(d.line as u32, d.col_start as u32),
-            Position::new(d.line as u32, d.col_end as u32),
+            Position::new(d.line as u32, start),
+            Position::new(d.line as u32, end),
         ),
         severity: Some(match d.severity {
             skript_checks::Severity::Error => DiagnosticSeverity::ERROR,
@@ -470,9 +481,10 @@ impl LanguageServer for Backend {
         let Some(line) = lines.get(line_idx) else {
             return Ok(None);
         };
-        // prefix = text on the line from column 0 up to the cursor
-        let char_idx = char_index_for_column(line, pos.character as usize);
-        let prefix = &line[..char_idx.min(line.len())];
+        // prefix = text on the line from column 0 up to the cursor. The
+        // client column is UTF-16; the slice index below is bytes.
+        let byte_idx = utf16_col_to_byte_offset(line, pos.character);
+        let prefix = &line[..byte_idx];
         let ctx = infer_context(line);
 
         let max = self.state.config().max_completions;
@@ -557,13 +569,15 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        // The engine and AST resolver both index the line in UTF-8 bytes.
+        let cursor = utf16_col_to_byte_offset(line, pos.character);
+
         // 1. Syntax docs from SkriptHub via the pattern engine thread.
         //    The engine matches the line against all 13,661 compiled patterns
         //    and returns the best-matching entry ID. We resolve it to a
         //    SyntaxEntry via EntryTable for markdown rendering. The engine's
         //    span covers the whole line; highlight just the word under the
         //    cursor (fall back to the line span on non-word text).
-        let cursor = pos.character as usize;
         let syntax_hover = match self
             .state
             .hover_via_engine(line.to_string(), Some(cursor))
@@ -572,26 +586,27 @@ impl LanguageServer for Backend {
             Some((entry_id, span)) => self
                 .state
                 .with_index(|table| {
-                    table.get(entry_id).map(|entry| hover::HoverInfo {
-                        markdown: hover::render(entry),
-                        range: match hover::word_span_at(line, cursor) {
-                            Some((s, e)) => (s as u32, e as u32),
-                            None => (span.0 as u32, span.1 as u32),
-                        },
+                    table.get(entry_id).map(|entry| {
+                        let (s, e) = hover::word_span_at(line, cursor).unwrap_or(span);
+                        hover::HoverInfo {
+                            markdown: hover::render(entry),
+                            range: (s as u32, e as u32),
+                        }
                     })
                 })
                 .flatten(),
             None => None,
         };
 
-        // 2. AST-resolved hover using cached snapshot (takes priority — more precise)
+        // 2. AST-resolved hover using cached snapshot (takes priority — more precise).
+        //    `hover_at_ast` takes a byte column and returns byte columns.
         let ast_hover = self
             .state
             .with_snapshot(&uri, |snap| {
                 hover::hover_at_ast(
                     &text,
                     pos.line,
-                    pos.character,
+                    cursor as u32,
                     &snap.parse_result.program,
                     &snap.analysis,
                 )
@@ -609,14 +624,19 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        // `info.range` is a byte span on `line`; convert to UTF-16 for the
+        // client. Clamping guarantees a non-inverted range even when the
+        // resolver reports a byte inside a multi-byte character.
+        let start = byte_offset_to_utf16_col(line, info.range.0 as usize);
+        let end = byte_offset_to_utf16_col(line, info.range.1 as usize).max(start);
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: info.markdown,
             }),
             range: Some(Range::new(
-                Position::new(pos.line, info.range.0),
-                Position::new(pos.line, info.range.1),
+                Position::new(pos.line, start),
+                Position::new(pos.line, end),
             )),
         }))
     }
@@ -630,7 +650,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let toks = tokens::tokenize(&text);
-        let data = encode_semantic_tokens(&toks);
+        let data = encode_semantic_tokens(&text, &toks);
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
             data,
@@ -693,7 +713,7 @@ impl LanguageServer for Backend {
         let location = self
             .state
             .with_snapshot(&uri, |snap| {
-                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let offset = lsp_position_to_offset(&text, pos.line, pos.character);
                 let symbol = references::find_symbol_at_offset(
                     &snap.parse_result.program,
                     &snap.analysis,
@@ -727,7 +747,7 @@ impl LanguageServer for Backend {
         let locations = self
             .state
             .with_snapshot(&uri, |snap| {
-                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let offset = lsp_position_to_offset(&text, pos.line, pos.character);
                 let symbol = references::find_symbol_at_offset(
                     &snap.parse_result.program,
                     &snap.analysis,
@@ -762,7 +782,7 @@ impl LanguageServer for Backend {
         let Some(text) = self.state.get_doc(&uri) else {
             return Ok(None);
         };
-        let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+        let offset = lsp_position_to_offset(&text, pos.line, pos.character);
 
         let (func_name, active_param) = match find_function_call_context(&text, offset) {
             Some(ctx) => ctx,
@@ -846,12 +866,12 @@ impl LanguageServer for Backend {
                 continue;
             }
             let line = diag.range.start.line;
-            let line_text = text.lines().nth(line as usize).unwrap_or("");
+            let line_text = line_text_at(&text, line).unwrap_or("");
             let line_range = Range::new(
                 Position::new(line, 0),
-                // Byte length — ASCII approximation, consistent with the
-                // reverse path in `char_index_for_column`.
-                Position::new(line, line_text.len() as u32),
+                // The edit covers the whole line; report its UTF-16 length,
+                // not the UTF-8 byte length.
+                Position::new(line, byte_offset_to_utf16_col(line_text, line_text.len())),
             );
 
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
@@ -917,7 +937,7 @@ impl LanguageServer for Backend {
         let edits = self
             .state
             .with_snapshot(&uri, |snap| {
-                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let offset = lsp_position_to_offset(&text, pos.line, pos.character);
                 let symbol = references::find_symbol_at_offset(
                     &snap.parse_result.program,
                     &snap.analysis,
@@ -968,7 +988,7 @@ impl LanguageServer for Backend {
         let highlights = self
             .state
             .with_snapshot(&uri, |snap| {
-                let offset = completion::linecol_to_offset(&text, pos.line, pos.character);
+                let offset = lsp_position_to_offset(&text, pos.line, pos.character);
                 let symbol = references::find_symbol_at_offset(
                     &snap.parse_result.program,
                     &snap.analysis,
@@ -1007,33 +1027,40 @@ impl LanguageServer for Backend {
             .positions
             .into_iter()
             .map(|pos| {
-                let line_idx = pos.line as usize;
-                let lines: Vec<&str> = text.lines().collect();
-                let line_text = lines.get(line_idx).copied().unwrap_or("");
-                let char_idx = pos.character as usize;
-                let char_idx = char_idx.min(line_text.len());
+                let line_text = line_text_at(&text, pos.line).unwrap_or("");
+                // The client column is UTF-16; all slicing below is bytes.
+                // `utf16_col_to_byte_offset` never returns a mid-character
+                // index, so no slice can panic.
+                let byte = utf16_col_to_byte_offset(line_text, pos.character);
 
                 // Word range: expand left/right to word boundaries
-                // (alphanumeric + underscore).
-                let word_start = line_text[..char_idx]
-                    .rfind(|c: char| !c.is_alphanumeric() && c != '_')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-                let word_end = line_text[char_idx..]
-                    .find(|c: char| !c.is_alphanumeric() && c != '_')
-                    .map(|i| char_idx + i)
-                    .unwrap_or(line_text.len());
+                // (Unicode alphanumeric + underscore).
+                let word_start = line_text[..byte]
+                    .char_indices()
+                    .rev()
+                    .take_while(|(_, c)| is_word_char(*c))
+                    .last()
+                    .map(|(i, _)| i)
+                    .unwrap_or(byte);
+                let word_end = line_text[byte..]
+                    .char_indices()
+                    .take_while(|(_, c)| is_word_char(*c))
+                    .last()
+                    .map(|(i, c)| byte + i + c.len_utf8())
+                    .unwrap_or(byte);
 
                 let word_range = Range::new(
-                    Position::new(pos.line, word_start as u32),
-                    Position::new(pos.line, word_end as u32),
+                    Position::new(pos.line, byte_offset_to_utf16_col(line_text, word_start)),
+                    Position::new(pos.line, byte_offset_to_utf16_col(line_text, word_end)),
                 );
                 let line_range = Range::new(
                     Position::new(pos.line, 0),
-                    Position::new(pos.line, line_text.len() as u32),
+                    Position::new(
+                        pos.line,
+                        byte_offset_to_utf16_col(line_text, line_text.len()),
+                    ),
                 );
-                let total_lines = lines.len() as u32;
-                let doc_range = Range::new(Position::new(0, 0), Position::new(total_lines, 0));
+                let doc_range = Range::new(Position::new(0, 0), document_end_position(&text));
 
                 // Chain: word → line → document
                 let doc_sel = tower_lsp::lsp_types::SelectionRange {
@@ -1060,15 +1087,77 @@ impl LanguageServer for Backend {
     }
 }
 
-/// Convert an LSP column (UTF-16 code units) to a byte/char index into a
-/// Rust string slice. We treat the line as UTF-8 and count `char()`s, which
-/// matches LSP semantics when the document is ASCII (the common case for
-/// Skript). For non-ASCII this is a close-enough approximation.
-fn char_index_for_column(line: &str, column: usize) -> usize {
+/// Text of a 0-based line, with the trailing `\r` of CRLF removed.
+fn line_text_at(text: &str, line: u32) -> Option<&str> {
+    text.lines().nth(line as usize)
+}
+
+/// Byte offset of the first character of a 0-based line.
+fn line_start_offset(text: &str, line: u32) -> Option<usize> {
+    if line == 0 {
+        return Some(0);
+    }
+    let mut current = 0u32;
+    for (i, c) in text.char_indices() {
+        if c == '\n' {
+            current += 1;
+            if current == line {
+                return Some(i + 1);
+            }
+        }
+    }
+    None
+}
+
+/// Convert an LSP position to a UTF-8 byte offset into `text`.
+///
+/// The client column is UTF-16 code units; all core APIs index bytes.
+/// Positions past the end of the document clamp to `text.len()`, matching
+/// the graceful-degradation behavior of the handlers that use this.
+fn lsp_position_to_offset(text: &str, line: u32, character: u32) -> usize {
+    let Some(start) = line_start_offset(text, line) else {
+        return text.len();
+    };
+    let rest = &text[start..];
+    let raw_line = rest.split('\n').next().unwrap_or("");
+    let line_text = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+    start + utf16_col_to_byte_offset(line_text, character)
+}
+
+/// Convert a byte offset into `text` to an LSP position (UTF-16 column).
+fn offset_to_lsp_position(text: &str, offset: usize) -> Position {
+    let (line, byte_col) = validation::offset_to_linecol(text, offset);
+    let line_text = line_text_at(text, line).unwrap_or("");
+    Position::new(line, byte_offset_to_utf16_col(line_text, byte_col as usize))
+}
+
+/// Convert a 0-based character column (Unicode scalar values) to a byte
+/// offset into `line`. Used for `skript-checks` diagnostics.
+fn char_col_to_byte_offset(line: &str, col: usize) -> usize {
     line.char_indices()
-        .nth(column)
-        .map(|(idx, _)| idx)
-        .unwrap_or_else(|| line.len())
+        .nth(col)
+        .map(|(i, _)| i)
+        .unwrap_or(line.len())
+}
+
+/// A "word" for selectionRange expansion: Unicode alphanumeric + `_`.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// End position of the whole document in LSP coordinates.
+///
+/// Uses the number of newlines (not `str::lines`, which drops a trailing
+/// empty line) so a document ending in `\n` correctly ends at column 0 of
+/// the following empty line.
+fn document_end_position(text: &str) -> Position {
+    if text.is_empty() {
+        return Position::new(0, 0);
+    }
+    let line = text.bytes().filter(|&b| b == b'\n').count() as u32;
+    let last = text.rsplit('\n').next().unwrap_or("");
+    let last = last.strip_suffix('\r').unwrap_or(last);
+    Position::new(line, byte_offset_to_utf16_col(last, last.len()))
 }
 
 /// Decide whether a line is at the top level (no indentation) of the file or
@@ -1082,13 +1171,11 @@ fn infer_context(line: &str) -> CompletionContext {
     }
 }
 
-/// Convert a byte-offset `Span` to an LSP `Range`.
+/// Convert a byte-offset `Span` to an LSP `Range` (UTF-16 columns).
 fn span_to_range(source: &str, span: skript_core::ast::Span) -> Range {
-    let (start_line, start_col) = skript_core::validation::offset_to_linecol(source, span.start);
-    let (end_line, end_col) = skript_core::validation::offset_to_linecol(source, span.end);
     Range::new(
-        Position::new(start_line, start_col),
-        Position::new(end_line, end_col),
+        offset_to_lsp_position(source, span.start),
+        offset_to_lsp_position(source, span.end),
     )
 }
 
@@ -1200,13 +1287,11 @@ fn collect_type_hints(
                         .type_inference
                         .get_type(assignment.value.span().start);
                     if let skript_core::semantic::types::TypeInfo::Known(ty) = ty {
-                        // Hint renders right after the variable name.
-                        let (line, col) = skript_core::validation::offset_to_linecol(
-                            self.source,
-                            variable.span.end,
-                        );
+                        // Hint renders right after the variable name. The
+                        // span is a byte offset; convert to UTF-16 for LSP.
+                        let position = offset_to_lsp_position(self.source, variable.span.end);
                         self.hints.push(InlayHint {
-                            position: Position::new(line, col),
+                            position,
                             label: InlayHintLabel::String(format!(": {ty}")),
                             kind: Some(InlayHintKind::TYPE),
                             text_edits: None,
@@ -1231,26 +1316,40 @@ fn collect_type_hints(
 }
 
 /// Encode semantic tokens in the LSP relative-position delta format.
-fn encode_semantic_tokens(toks: &[skript_core::tokens::SemanticToken]) -> Vec<SemanticToken> {
+///
+/// `tokenize` reports UTF-8 byte columns/lengths; the LSP wire format uses
+/// UTF-16 code units, so every token is converted against its source line
+/// (and clamped so a token can never extend past the line's true end).
+fn encode_semantic_tokens(
+    source: &str,
+    toks: &[skript_core::tokens::SemanticToken],
+) -> Vec<SemanticToken> {
     let mut out = Vec::with_capacity(toks.len());
     let mut prev_line = 0u32;
     let mut prev_col = 0u32;
     for t in toks {
-        let delta_line = t.line - prev_line;
+        let line_text = line_text_at(source, t.line).unwrap_or("");
+        let start_byte = (t.col as usize).min(line_text.len());
+        let end_byte = start_byte
+            .saturating_add(t.length as usize)
+            .min(line_text.len());
+        let start = byte_offset_to_utf16_col(line_text, start_byte);
+        let end = byte_offset_to_utf16_col(line_text, end_byte).max(start);
+        let delta_line = t.line.saturating_sub(prev_line);
         let delta_col = if delta_line == 0 {
-            t.col - prev_col
+            start.saturating_sub(prev_col)
         } else {
-            t.col
+            start
         };
         out.push(SemanticToken {
             delta_line,
             delta_start: delta_col,
-            length: t.length,
+            length: end - start,
             token_type: token_type_index(t.ty),
             token_modifiers_bitset: 0,
         });
         prev_line = t.line;
-        prev_col = t.col;
+        prev_col = start;
     }
     out
 }
@@ -1300,7 +1399,92 @@ fn find_function_call_context(source: &str, offset: usize) -> Option<(String, u3
 
 #[cfg(test)]
 mod tests {
-    use super::find_function_call_context;
+    use super::*;
+    use skript_checks::{LineDiagnostic, Severity as CheckSeverity};
+
+    fn line_diag(col_start: usize, col_end: usize) -> LineDiagnostic {
+        LineDiagnostic {
+            line: 0,
+            col_start,
+            col_end,
+            severity: CheckSeverity::Info,
+            code: "x",
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn line_diagnostics_report_utf16_columns_not_bytes() {
+        let source = "broadcast §a§b§c§dhello world";
+        // Character columns from skript-checks: 14 = 'h', 19 = after 'o'.
+        let lsp = line_diagnostic_to_lsp(line_diag(14, 19), source);
+        assert_eq!(lsp.range.start, Position::new(0, 14));
+        assert_eq!(lsp.range.end, Position::new(0, 19));
+
+        // The same columns are byte offsets 22 and 27; the pre-fix code
+        // emitted those directly and overshot the line.
+        assert_eq!(source.len(), 33);
+        assert_eq!(source.encode_utf16().count(), 29);
+    }
+
+    #[test]
+    fn line_diagnostics_clamp_out_of_range_columns() {
+        let lsp = line_diagnostic_to_lsp(line_diag(99, 100), "§§");
+        assert_eq!(lsp.range.start, Position::new(0, 2));
+        assert_eq!(lsp.range.end, Position::new(0, 2));
+    }
+
+    #[test]
+    fn semantic_token_columns_are_utf16_and_never_exceed_the_line() {
+        let source = "broadcast §a§b§c§dhello world";
+        let utf16_len = source.encode_utf16().count() as u32;
+        let encoded = encode_semantic_tokens(source, &skript_core::tokens::tokenize(source));
+
+        let mut line = 0u32;
+        let mut col = 0u32;
+        for token in &encoded {
+            line += token.delta_line;
+            col = if token.delta_line == 0 {
+                col + token.delta_start
+            } else {
+                token.delta_start
+            };
+            assert_eq!(line, 0);
+            assert!(
+                col + token.length <= utf16_len,
+                "token {col}..{} exceeds line length {utf16_len}",
+                col + token.length
+            );
+        }
+    }
+
+    #[test]
+    fn positions_round_trip_through_non_ascii_text() {
+        let source = "on load:\n\tbroadcast §a§b §c hello\n\tbroadcast \"😀\"";
+        let positions = [
+            Position::new(1, 0),
+            Position::new(1, 8),  // tab + "broadcast" (9 bytes, 9 units)
+            Position::new(1, 10), // space before the first colour code
+            Position::new(1, 19), // 'h' of hello
+            Position::new(2, 14), // inside the emoji line
+            Position::new(2, 15), // line end
+        ];
+        for pos in positions {
+            let offset = lsp_position_to_offset(source, pos.line, pos.character);
+            let back = offset_to_lsp_position(source, offset);
+            assert_eq!(back, pos, "round trip failed for {pos:?}");
+        }
+    }
+
+    #[test]
+    fn document_end_position_accounts_for_trailing_newline_and_utf16() {
+        assert_eq!(document_end_position(""), Position::new(0, 0));
+        assert_eq!(document_end_position("a"), Position::new(0, 1));
+        assert_eq!(document_end_position("a\n"), Position::new(1, 0));
+        assert_eq!(document_end_position("a\n§"), Position::new(1, 1));
+        assert_eq!(document_end_position("a\r\nb"), Position::new(1, 1));
+        assert_eq!(document_end_position("😀"), Position::new(0, 2));
+    }
 
     #[test]
     fn finds_call_and_active_parameter() {

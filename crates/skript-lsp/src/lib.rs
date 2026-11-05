@@ -15,5 +15,6 @@
 pub mod backend;
 pub mod folding;
 pub mod options;
+pub mod position;
 pub mod state;
 pub mod ws;
