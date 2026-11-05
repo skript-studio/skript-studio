@@ -1,17 +1,17 @@
-# Bundled server binaries — NOT committed to git
+# Bundled server binary — NOT committed to git
 
-`bin/skript-lsp-linux-x64` and `bin/skript-lsp-windows-x64.exe` are build
-artifacts. They were removed from the repository and its entire git history
-(2026-11-04) because committed binaries drift from source and permanently
-bloat every clone (~120 MB of blobs after three rebuild generations).
+`bin/skript-lsp-windows-x64.exe` is the only server binary the extension
+bundles. It is a build artifact, produced from the merge commit:
 
-How to produce them locally:
+- CI: the `binaries` job on `windows-latest` builds it and the
+  `vscode-extension` job downloads it before packaging the vsix.
+- Locally (Windows x64 only): `bun run build:binary` (from
+  `extensions/vscode-skript`).
 
-- native slot: `bun run build:binary` (from `extensions/vscode-skript`)
-- both slots from Linux: `scripts/cross-build-binaries.sh` (repo root)
+Linux and macOS users provide the server themselves:
 
-CI is being migrated to cross-build the binaries from the merge commit and
-attach them as artifacts (see the remediation plan). Until that lands, the
-vsix packaging step requires locally built binaries in this directory.
+- install `skript-lsp` on `PATH`, or
+- set `skript-lsp.serverPath` to a binary built with
+  `cargo build --release -p skript-lsp`.
 
-Binaries matching this pattern are gitignored; never commit them again.
+Binaries matching `skript-lsp-*` are gitignored; never commit them again.

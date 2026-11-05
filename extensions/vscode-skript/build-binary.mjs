@@ -4,10 +4,14 @@
 //
 //   bun run build:binary
 //
-// Cross-compiling both bundled binaries from an x86_64 Linux host is possible
-// with scripts/cross-build-binaries.sh at the repo root. On Windows this
-// script produces an MSVC build that simply overwrites the committed
-// cross-built exe in bin/.
+// Binary distribution is Windows x64 only: this script only fills the
+// win32-x64 slot. On every other platform the extension uses a user-provided
+// server (PATH or skript-lsp.serverPath), built with:
+//
+//   cargo build --release -p skript-lsp
+//
+// CI builds this same slot from the merge commit on a windows-latest runner
+// and downloads it into the vsix packaging job; nothing is ever committed.
 import { cpSync, mkdirSync, chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -16,34 +20,28 @@ import * as path from "node:path";
 const extDir = path.dirname(fileURLToPath(new URL(import.meta.url)));
 const repoRoot = path.resolve(extDir, "..", "..");
 
-const slots = {
-  "win32-x64": "skript-lsp-windows-x64.exe",
-  "linux-x64": "skript-lsp-linux-x64",
-};
+const outName = "skript-lsp-windows-x64.exe";
 
-const key = `${process.platform}-${process.arch}`;
-const outName = slots[key];
-if (!outName) {
+if (process.platform !== "win32" || process.arch !== "x64") {
   console.error(
-    `No bundled binary slot for ${key}; this extension bundles win32-x64 and linux-x64 only.`,
+    `The extension bundles a server binary for win32-x64 only; ` +
+      `${process.platform}-${process.arch} is unsupported.\n` +
+      `Build the server for this platform with:\n` +
+      `  cargo build --release -p skript-lsp\n` +
+      `then point "skript-lsp.serverPath" at target/release/skript-lsp.`,
   );
   process.exit(1);
 }
 
-console.log(`Building skript-lsp (release) for ${key}...`);
+console.log(`Building skript-lsp (release) for win32-x64...`);
 execSync("cargo build -p skript-lsp --release", {
   cwd: repoRoot,
   stdio: "inherit",
 });
 
-const built = path.join(
-  repoRoot,
-  "target",
-  "release",
-  process.platform === "win32" ? "skript-lsp.exe" : "skript-lsp",
-);
+const built = path.join(repoRoot, "target", "release", "skript-lsp.exe");
 const dest = path.join(extDir, "bin", outName);
 mkdirSync(path.dirname(dest), { recursive: true });
 cpSync(built, dest);
-if (process.platform !== "win32") chmodSync(dest, 0o755);
+chmodSync(dest, 0o755);
 console.log(`Copied ${path.relative(repoRoot, built)} -> bin/${outName}`);

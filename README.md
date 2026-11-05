@@ -143,22 +143,20 @@ Package manager: **Bun**.
 cd extensions/vscode-skript
 bun install                              # install JS deps
 bun run compile                          # JS output → out/
-bun run build:binary                     # release binary → bin/ (native cargo build for the current platform)
+bun run build:binary                     # Windows x64 only: release binary → bin/skript-lsp-windows-x64.exe
 bun run package                          # vsce package → skript-lsp.vsix
-bun run install-ext                        # code --install-extension skript-lsp.vsix
-bun run dev:install                      # all of the above: build → package → install
+bun run install-ext                      # code --install-extension skript-lsp.vsix
+bun run dev:install                      # Windows x64: build → package → install
 bun run download-cache                   # refresh SkriptHub corpus → ../../crates/skript-registry/testdata/skripthub.json
 ```
 
-The extension ships LSP binaries **inside the vsix**:
-`bin/skript-lsp-windows-x64.exe` (win32-x64) and `bin/skript-lsp-linux-x64`
-(linux-x64, static musl — runs on any x86_64 Linux regardless of the host
-glibc). `bun run build:binary` rebuilds the binary for your current platform
-into the matching slot, so a native MSVC build on Windows simply replaces the
-committed cross-built exe. On other platforms the extension falls back to a
-`skript-lsp` on `PATH` (or `skript-lsp.serverPath`). Both slots can be
-cross-built from an x86_64 Linux host with
-[`scripts/cross-build-binaries.sh`](scripts/cross-build-binaries.sh).
+Binary distribution is **Windows-only**. The vsix bundles exactly one server
+binary, `bin/skript-lsp-windows-x64.exe`: CI's `binaries` job builds it from
+the merge commit and the packaging job downloads it, while a Windows x64 dev
+machine can rebuild it locally with `bun run build:binary`. It is a build
+artifact (gitignored) and is never committed. Linux and macOS users provide
+the server themselves via `PATH` or `skript-lsp.serverPath`, building it with
+`cargo build --release -p skript-lsp`.
 
 All SkriptHub corpus data is **committed to the repo** — a fresh clone
 builds and tests with zero setup:
@@ -246,17 +244,21 @@ cargo run -p skript-lsp -- --port 9876 --log-level info &
 cargo test -p skript-lsp --test smoke -- --ignored --nocapture
 ```
 
-CI (`.github/workflows/ci.yml`, Linux only) runs two jobs:
+CI (`.github/workflows/ci.yml`) runs three jobs:
 
-- **Rust** — `cargo fmt --all --check`,
+- **Rust** (`ubuntu-latest`) — `cargo fmt --all --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo check --workspace --all-targets`, and
   `cargo test --workspace --all-targets`.
-- **VSCode extension** — `bun install --frozen-lockfile`, `bun run
-  typecheck`, `bun run compile`, a guard that both bundled binaries
-  (`bin/skript-lsp-linux-x64`, `bin/skript-lsp-windows-x64.exe`) are present,
-  `bun run package` (vsce under the bun runtime), then uploads
-  `skript-lsp.vsix` as a workflow artifact.
+- **Windows server binary** (`windows-latest`, after Rust) — builds
+  `skript-lsp.exe` from the merge commit, stages it as
+  `bin/skript-lsp-windows-x64.exe`, and uploads it as the
+  `skript-lsp-windows-x64` artifact.
+- **VSCode extension** (`ubuntu-latest`, after the binary job) —
+  `bun install --frozen-lockfile`, `bun run typecheck`, `bun run compile`,
+  downloads the Windows binary into `bin/`, runs `bun run package` (vsce
+  under the bun runtime), verifies the vsix contains exactly one server
+  binary, and uploads `skript-lsp.vsix` as a workflow artifact.
 
 ## SkriptHub corpus
 

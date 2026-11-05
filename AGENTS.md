@@ -62,19 +62,23 @@ Package manager: **Bun** (`bun install`, `bun run`, `bunx`).
 cd extensions/vscode-skript
 bun install                              # install JS deps (vscode-languageclient, typescript, ...)
 bun run compile                          # JS output → out/
-bun run build:binary                     # release binary → bin/ (per-platform slot, native build)
+bun run build:binary                     # Windows x64 only: release binary → bin/skript-lsp-windows-x64.exe
 bun run package                          # vsce package → skript-lsp.vsix
-bun run install-ext                        # code --install-extension skript-lsp.vsix
-bun run dev:install                      # all of the above: build → package → install
-bun run prepublish                       # build:binary → compile (no install)
+bun run install-ext                      # code --install-extension skript-lsp.vsix
+bun run dev:install                      # Windows x64: build → package → install
+bun run prepublish                       # Windows x64: build:binary → compile (no install)
 bun run download-cache                   # refresh SkriptHub corpus → ../../crates/skript-registry/testdata/skripthub.json
 ```
 
 `extension.ts` starts the LSP with `--stdio --log-level`. No network calls
-at startup — cache embedded via `include_dir!` in `state.rs`. The vsix bundles
-`bin/skript-lsp-windows-x64.exe` + `bin/skript-lsp-linux-x64` (static musl);
-rebuild slots with `bun run build:binary` (native) or
-`scripts/cross-build-binaries.sh` at the repo root (cross, from Linux).
+at startup — cache embedded via `include_dir!` in `state.rs`. Binary
+distribution is Windows-only: CI's `binaries` job builds
+`skript-lsp-windows-x64.exe` from the merge commit, the extension job
+downloads it before packaging, and the vsix bundles exactly that one binary.
+It is a build artifact (gitignored), never committed; a Windows x64 dev
+machine rebuilds it with `bun run build:binary`. Linux and macOS use a
+user-provided server via `PATH` or `skript-lsp.serverPath`
+(`cargo build --release -p skript-lsp`).
 
 ## `.skriptrc.toml`
 
